@@ -262,8 +262,8 @@ type CacheConfig struct {
 type ModelCacheConfig struct {
 	RefreshInterval int                 `yaml:"refresh_interval" env:"CACHE_REFRESH_INTERVAL"`
 	ModelList       ModelListConfig     `yaml:"model_list"`
-	Local           *LocalCacheConfig   `yaml:"local"`
-	Redis           *RedisCacheConfig   `yaml:"redis"`
+	Local           *LocalCacheConfig  `yaml:"local"`
+	Redis           *RedisModelConfig  `yaml:"redis"`
 }
 
 // LocalCacheConfig holds local file cache configuration.
@@ -271,11 +271,20 @@ type LocalCacheConfig struct {
 	CacheDir string `yaml:"cache_dir" env:"GOMODEL_CACHE_DIR"`
 }
 
-// RedisCacheConfig holds Redis connection configuration. Shared by model and response cache.
-type RedisCacheConfig struct {
+// RedisModelConfig holds Redis connection configuration for the model registry cache.
+type RedisModelConfig struct {
 	URL string `yaml:"url" env:"REDIS_URL"`
-	Key string `yaml:"key" env:"REDIS_KEY"`
-	TTL int    `yaml:"ttl" env:"REDIS_TTL"`
+	Key string `yaml:"key" env:"REDIS_KEY_MODELS"`
+	TTL int    `yaml:"ttl" env:"REDIS_TTL_MODELS"`
+}
+
+// RedisResponseConfig holds Redis connection configuration for the response cache.
+// Uses separate env vars from RedisModelConfig to allow independent configuration.
+// URL and TTL fall back to the same env vars as the model cache when not set separately.
+type RedisResponseConfig struct {
+	URL string `yaml:"url" env:"REDIS_URL"`
+	Key string `yaml:"key" env:"REDIS_KEY_RESPONSES"`
+	TTL int    `yaml:"ttl" env:"REDIS_TTL_RESPONSES"`
 }
 
 // ResponseCacheConfig holds configuration for response cache middleware.
@@ -285,7 +294,7 @@ type ResponseCacheConfig struct {
 
 // SimpleCacheConfig holds configuration for exact-match response caching.
 type SimpleCacheConfig struct {
-	Redis *RedisCacheConfig `yaml:"redis"`
+	Redis *RedisResponseConfig `yaml:"redis"`
 }
 
 // ModelListConfig holds configuration for fetching the external model metadata registry.

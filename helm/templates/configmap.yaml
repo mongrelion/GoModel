@@ -9,7 +9,8 @@ data:
   BODY_SIZE_LIMIT: {{ .Values.server.bodySizeLimit | quote }}
   CACHE_TYPE: {{ include "gomodel.cacheType" . | quote }}
   {{- if or .Values.redis.enabled (eq .Values.cache.type "redis") }}
-  REDIS_KEY: {{ .Values.cache.redis.key | quote }}
+  REDIS_KEY_MODELS: {{ .Values.cache.redis.keyModels | default "gomodel:models" | quote }}
+  REDIS_KEY_RESPONSES: {{ .Values.cache.redis.keyResponses | default "gomodel:response:" | quote }}
   {{- end }}
   METRICS_ENABLED: {{ .Values.metrics.enabled | quote }}
   METRICS_ENDPOINT: {{ .Values.metrics.endpoint | quote }}
