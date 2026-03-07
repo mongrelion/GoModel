@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -24,6 +26,7 @@ var cacheablePaths = map[string]bool{
 type simpleCacheMiddleware struct {
 	store cache.Store
 	ttl   time.Duration
+	wg    sync.WaitGroup
 }
 
 func newSimpleCacheMiddleware(store cache.Store, ttl time.Duration) *simpleCacheMiddleware {
@@ -73,15 +76,26 @@ func (m *simpleCacheMiddleware) Middleware() echo.MiddlewareFunc {
 				return err
 			}
 			if c.Response().Status == http.StatusOK && capture.body.Len() > 0 {
+				data := bytes.Clone(capture.body.Bytes())
+				m.wg.Add(1)
 				go func() {
+					defer m.wg.Done()
 					storeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					_ = m.store.Set(storeCtx, key, capture.body.Bytes(), m.ttl)
+					if err := m.store.Set(storeCtx, key, data, m.ttl); err != nil {
+						slog.Warn("response cache write failed", "key", key, "err", err)
+					}
 				}()
 			}
 			return nil
 		}
 	}
+}
+
+// close waits for all in-flight cache writes to complete, then closes the store.
+func (m *simpleCacheMiddleware) close() error {
+	m.wg.Wait()
+	return m.store.Close()
 }
 
 func shouldSkipCache(req *http.Request) bool {

@@ -51,10 +51,10 @@ func (m *ResponseCacheMiddleware) Middleware() echo.MiddlewareFunc {
 	}
 }
 
-// Close releases cache resources.
+// Close waits for any in-flight cache writes to complete, then releases cache resources.
 func (m *ResponseCacheMiddleware) Close() error {
 	if m != nil && m.inner != nil && m.inner.store != nil {
-		return m.inner.store.Close()
+		return m.inner.close()
 	}
 	return nil
 }

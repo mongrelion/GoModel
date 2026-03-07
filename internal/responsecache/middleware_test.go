@@ -35,7 +35,8 @@ func TestSimpleCacheMiddleware_CacheHit(t *testing.T) {
 		t.Fatalf("first request should not have X-Cache: %s", rec.Header().Get("X-Cache"))
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the tracked background write to complete before the second request.
+	mw.inner.wg.Wait()
 
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
@@ -154,5 +155,31 @@ func TestSimpleCacheMiddleware_NonCacheablePath(t *testing.T) {
 	}
 	if callCount != 2 {
 		t.Fatalf("/v1/models is not cacheable, handler called %d times", callCount)
+	}
+}
+
+func TestSimpleCacheMiddleware_CloseWaitsForPendingWrites(t *testing.T) {
+	store := cache.NewMapStore()
+	mw := NewResponseCacheMiddlewareWithStore(store, time.Hour)
+	e := echo.New()
+	e.Use(mw.Middleware())
+	e.POST("/v1/chat/completions", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"result": "ok"})
+	})
+
+	body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"close-test"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	// Close must drain any in-flight write before closing the store.
+	// If Close races store.Close against the goroutine's Set, this will
+	// panic or produce a data race under -race.
+	if err := mw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
