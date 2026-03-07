@@ -49,7 +49,7 @@ func (m *simpleCacheMiddleware) Middleware() echo.MiddlewareFunc {
 			}
 			body, err := io.ReadAll(c.Request().Body)
 			if err != nil {
-				return next(c)
+				return err
 			}
 			c.Request().Body = io.NopCloser(bytes.NewReader(body))
 			if isStreamingRequest(path, body) {

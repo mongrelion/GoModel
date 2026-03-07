@@ -2,6 +2,8 @@ package responsecache
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -209,3 +211,31 @@ func TestSimpleCacheMiddleware_CloseWaitsForPendingWrites(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+func TestSimpleCacheMiddleware_BodyReadErrorPropagated(t *testing.T) {
+	store := cache.NewMapStore()
+	defer store.Close()
+	mw := NewResponseCacheMiddlewareWithStore(store, time.Hour)
+	e := echo.New()
+	e.Use(mw.Middleware())
+	handlerCalled := false
+	e.POST("/v1/chat/completions", func(c echo.Context) error {
+		handlerCalled = true
+		return c.JSON(http.StatusOK, map[string]string{"n": "1"})
+	})
+
+	readErr := errors.New("simulated body read error")
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", io.NopCloser(&errReader{err: readErr}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if handlerCalled {
+		t.Error("downstream handler should not be called when body read fails")
+	}
+}
+
+// errReader is an io.Reader that always returns an error.
+type errReader struct{ err error }
+
+func (r *errReader) Read(_ []byte) (int, error) { return 0, r.err }
