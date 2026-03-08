@@ -739,6 +739,7 @@ type streamConverter struct {
 	toolCalls         map[int]*streamToolCallState
 	buffer            []byte
 	closed            bool
+	emittedToolCalls  bool
 }
 
 type streamToolCallState struct {
@@ -830,6 +831,16 @@ func (sc *streamConverter) Close() error {
 	return sc.body.Close()
 }
 
+func (sc *streamConverter) mapStreamStopReason(reason string) string {
+	// Preserve raw "tool_use" when the upstream stream never produced any
+	// tool call deltas. This avoids claiming OpenAI-style tool calls for a
+	// malformed or partial Anthropic stream.
+	if reason == "tool_use" && !sc.emittedToolCalls {
+		return reason
+	}
+	return normalizeAnthropicStopReason(reason)
+}
+
 func extractInitialToolArguments(input json.RawMessage) string {
 	if len(input) == 0 {
 		return ""
@@ -859,7 +870,7 @@ func normalizeAnthropicStopReason(stopReason string) string {
 		return "tool_calls"
 	case "end_turn", "stop_sequence":
 		return "stop"
-	case "max_tokens":
+	case "max_tokens", "model_context_window_exceeded":
 		return "length"
 	default:
 		return stopReason
@@ -926,6 +937,7 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 			}
 			state.Started = true
 			sc.toolCalls[event.Index] = state
+			sc.emittedToolCalls = true
 
 			return sc.formatChatChunk(map[string]any{
 				"tool_calls": []map[string]any{
@@ -970,6 +982,7 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 			_, _ = state.Arguments.WriteString(event.Delta.PartialJSON)
 			if !state.Started {
 				state.Started = true
+				sc.emittedToolCalls = true
 				return sc.formatChatChunk(map[string]any{
 					"tool_calls": []map[string]any{
 						{
@@ -984,6 +997,7 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 					},
 				}, nil, nil)
 			}
+			sc.emittedToolCalls = true
 			return sc.formatChatChunk(map[string]any{
 				"tool_calls": []map[string]any{
 					{
@@ -1000,6 +1014,7 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 		state := sc.toolCalls[event.Index]
 		if state != nil && !state.Started && state.PlaceholderObject {
 			state.Started = true
+			sc.emittedToolCalls = true
 			return sc.formatChatChunk(map[string]any{
 				"tool_calls": []map[string]any{
 					{
@@ -1021,7 +1036,7 @@ func (sc *streamConverter) convertEvent(event *anthropicStreamEvent) string {
 		if (event.Delta != nil && event.Delta.StopReason != "") || event.Usage != nil {
 			var finishReason interface{}
 			if event.Delta != nil && event.Delta.StopReason != "" {
-				finishReason = normalizeAnthropicStopReason(event.Delta.StopReason)
+				finishReason = sc.mapStreamStopReason(event.Delta.StopReason)
 			}
 			return sc.formatChatChunk(map[string]any{}, finishReason, event.Usage)
 		}
