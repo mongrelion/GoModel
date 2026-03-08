@@ -23,8 +23,8 @@ func TestMessageUnmarshalJSON_AllowsNullContent(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v, want nil", err)
 	}
 
-	if msg.Content != "" {
-		t.Fatalf("Content = %q, want empty string", msg.Content)
+	if msg.Content != nil {
+		t.Fatalf("Content = %#v, want nil", msg.Content)
 	}
 	if !msg.ContentNull {
 		t.Fatal("ContentNull = false, want true")

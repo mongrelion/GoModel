@@ -1848,7 +1848,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "message": {
-                    "$ref": "#/definitions/core.Message"
+                    "$ref": "#/definitions/core.ResponseMessage"
                 }
             }
         },
@@ -1866,6 +1866,23 @@ const docTemplate = `{
                 },
                 "rejected_prediction_tokens": {
                     "type": "integer"
+                }
+            }
+        },
+        "core.ContentPart": {
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "$ref": "#/definitions/core.ImageURLContent"
+                },
+                "input_audio": {
+                    "$ref": "#/definitions/core.InputAudioContent"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
                 }
             }
         },
@@ -2044,11 +2061,41 @@ const docTemplate = `{
                 }
             }
         },
+        "core.ImageURLContent": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "media_type": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "core.InputAudioContent": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "string"
+                },
+                "format": {
+                    "type": "string"
+                }
+            }
+        },
         "core.Message": {
             "type": "object",
             "properties": {
                 "content": {
-                    "type": "string"
+                    "description": "ContentSchema documents that ` + "`" + `content` + "`" + ` accepts either a plain string\nor an array of ContentPart values.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/core.ContentPart"
+                    },
+                    "x-oneof": "[{\"type\":\"null\"},{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/core.ContentPart\"}}]"
                 },
                 "role": {
                     "type": "string"
@@ -2273,6 +2320,27 @@ const docTemplate = `{
                 }
             }
         },
+        "core.ResponseMessage": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/core.ContentPart"
+                    },
+                    "x-oneof": "[{\"type\":\"null\"},{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/core.ContentPart\"}}]"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "tool_calls": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/core.ToolCall"
+                    }
+                }
+            }
+        },
         "core.ResponsesContentItem": {
             "type": "object",
             "properties": {
@@ -2282,11 +2350,17 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "image_url": {
+                    "$ref": "#/definitions/core.ImageURLContent"
+                },
+                "input_audio": {
+                    "$ref": "#/definitions/core.InputAudioContent"
+                },
                 "text": {
                     "type": "string"
                 },
                 "type": {
-                    "description": "\"output_text\", etc.",
+                    "description": "\"output_text\", \"input_image\", \"input_audio\", etc.",
                     "type": "string"
                 }
             }
@@ -2298,6 +2372,21 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "core.ResponsesInputItem": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/core.ContentPart"
+                    },
+                    "x-oneof": "[{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/core.ContentPart\"}}]"
+                },
+                "role": {
                     "type": "string"
                 }
             }
@@ -2339,9 +2428,11 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "input": {
-                    "description": "string or []ResponsesInputItem — see docs for array form",
-                    "type": "string",
-                    "example": "Tell me a joke"
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/core.ResponsesInputItem"
+                    },
+                    "x-oneof": "[{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/definitions/core.ResponsesInputItem\"}}]"
                 },
                 "instructions": {
                     "type": "string"

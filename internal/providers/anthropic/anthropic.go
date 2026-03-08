@@ -35,6 +35,13 @@ const (
 	anthropicAPIVersion = "2023-06-01"
 )
 
+var allowedAnthropicImageMediaTypes = map[string]struct{}{
+	"image/jpeg": {},
+	"image/png":  {},
+	"image/gif":  {},
+	"image/webp": {},
+}
+
 // Provider implements the core.Provider interface for Anthropic
 type Provider struct {
 	client *llmclient.Client
@@ -197,15 +204,23 @@ type anthropicMessage struct {
 	Content any    `json:"content"`
 }
 
-type anthropicMessageContentBlock struct {
+type anthropicContentBlock struct {
+	Type      string                  `json:"type"`
+	Text      string                  `json:"text,omitempty"`
+	ID        string                  `json:"id,omitempty"`
+	Name      string                  `json:"name,omitempty"`
+	Input     any                     `json:"input,omitempty"`
+	ToolUseID string                  `json:"tool_use_id,omitempty"`
+	Content   any                     `json:"content,omitempty"`
+	IsError   bool                    `json:"is_error,omitempty"`
+	Source    *anthropicContentSource `json:"source,omitempty"`
+}
+
+type anthropicContentSource struct {
 	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Input     any    `json:"input,omitempty"`
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	Content   any    `json:"content,omitempty"`
-	IsError   bool   `json:"is_error,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 // anthropicResponse represents the Anthropic API response format
@@ -506,30 +521,44 @@ func parseToolCallArguments(arguments string) (any, error) {
 }
 
 func buildAnthropicMessageContent(msg core.Message) (any, error) {
+	const maxToolCallsPerMessage = 1024
+
 	if msg.Role == "tool" {
 		toolUseID := strings.TrimSpace(msg.ToolCallID)
 		if toolUseID == "" {
 			return nil, core.NewInvalidRequestError("tool message is missing tool_call_id", nil)
 		}
-		return []anthropicMessageContentBlock{
+		return []anthropicContentBlock{
 			{
 				Type:      "tool_result",
 				ToolUseID: toolUseID,
-				Content:   msg.Content,
+				Content:   core.ExtractTextContent(msg.Content),
 			},
 		}, nil
 	}
 
+	content, err := convertMessageContentToAnthropic(msg.Content)
+	if err != nil {
+		return nil, err
+	}
 	if len(msg.ToolCalls) == 0 {
-		return msg.Content, nil
+		return content, nil
+	}
+	if len(msg.ToolCalls) > maxToolCallsPerMessage {
+		return nil, core.NewInvalidRequestError("too many tool calls in message", nil)
 	}
 
-	blocks := make([]anthropicMessageContentBlock, 0, len(msg.ToolCalls)+1)
-	if strings.TrimSpace(msg.Content) != "" {
-		blocks = append(blocks, anthropicMessageContentBlock{
-			Type: "text",
-			Text: msg.Content,
-		})
+	blocks := make([]anthropicContentBlock, 0, len(msg.ToolCalls)+1)
+	switch c := content.(type) {
+	case string:
+		if strings.TrimSpace(c) != "" {
+			blocks = append(blocks, anthropicContentBlock{
+				Type: "text",
+				Text: c,
+			})
+		}
+	case []anthropicContentBlock:
+		blocks = append(blocks, c...)
 	}
 	for _, toolCall := range msg.ToolCalls {
 		toolCallID := providers.ResponsesFunctionCallCallID(strings.TrimSpace(toolCall.ID))
@@ -541,7 +570,7 @@ func buildAnthropicMessageContent(msg core.Message) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		blocks = append(blocks, anthropicMessageContentBlock{
+		blocks = append(blocks, anthropicContentBlock{
 			Type:  "tool_use",
 			ID:    toolCallID,
 			Name:  toolName,
@@ -551,8 +580,12 @@ func buildAnthropicMessageContent(msg core.Message) (any, error) {
 	return blocks, nil
 }
 
-// convertToAnthropicRequest converts core.ChatRequest to Anthropic format
+// convertToAnthropicRequest converts core.ChatRequest to Anthropic format.
 func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error) {
+	if req == nil {
+		return nil, core.NewInvalidRequestError("anthropic chat request is required", nil)
+	}
+
 	anthropicReq := &anthropicRequest{
 		Model:       req.Model,
 		Messages:    make([]anthropicMessage, 0, len(req.Messages)),
@@ -590,7 +623,11 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
-			anthropicReq.System = msg.Content
+			systemText, err := textOnlyAnthropicContent(msg.Content)
+			if err != nil {
+				return nil, err
+			}
+			anthropicReq.System = appendAnthropicSystemText(anthropicReq.System, systemText)
 		} else {
 			content, err := buildAnthropicMessageContent(msg)
 			if err != nil {
@@ -631,15 +668,6 @@ func convertFromAnthropicResponse(resp *anthropicResponse) *core.ChatResponse {
 		usage.RawUsage = rawUsage
 	}
 
-	message := core.Message{
-		Role:      "assistant",
-		Content:   content,
-		ToolCalls: toolCalls,
-	}
-	if content == "" && len(toolCalls) > 0 {
-		message.ContentNull = true
-	}
-
 	return &core.ChatResponse{
 		ID:      resp.ID,
 		Object:  "chat.completion",
@@ -647,8 +675,12 @@ func convertFromAnthropicResponse(resp *anthropicResponse) *core.ChatResponse {
 		Created: time.Now().Unix(),
 		Choices: []core.Choice{
 			{
-				Index:        0,
-				Message:      message,
+				Index: 0,
+				Message: core.ResponseMessage{
+					Role:      "assistant",
+					Content:   content,
+					ToolCalls: toolCalls,
+				},
 				FinishReason: finishReason,
 			},
 		},
@@ -1039,10 +1071,152 @@ func parseCreatedAt(createdAt string) int64 {
 	return t.Unix()
 }
 
-// convertResponsesRequestToAnthropic converts a ResponsesRequest to Anthropic format
+// convertResponsesRequestToAnthropic converts a ResponsesRequest to Anthropic format.
 func convertResponsesRequestToAnthropic(req *core.ResponsesRequest) (*anthropicRequest, error) {
-	chatReq := providers.ConvertResponsesRequestToChat(req)
+	if req == nil {
+		return nil, core.NewInvalidRequestError("anthropic responses request is required", nil)
+	}
+
+	chatReq, err := providers.ConvertResponsesRequestToChat(req)
+	if err != nil {
+		return nil, err
+	}
 	return convertToAnthropicRequest(chatReq)
+}
+func appendAnthropicSystemText(existing, next string) string {
+	if next == "" {
+		return existing
+	}
+	if existing == "" {
+		return next
+	}
+	return existing + "\n\n" + next
+}
+
+func textOnlyAnthropicContent(content any) (string, error) {
+	if !core.HasStructuredContent(content) {
+		return core.ExtractTextContent(content), nil
+	}
+
+	parts, ok := core.NormalizeContentParts(content)
+	if !ok {
+		return "", core.NewInvalidRequestError("unsupported anthropic chat content format", nil)
+	}
+	for _, part := range parts {
+		if part.Type != "text" {
+			return "", core.NewInvalidRequestError("anthropic system messages only support text content", nil)
+		}
+	}
+	return core.ExtractTextContent(parts), nil
+}
+
+func convertMessageContentToAnthropic(content any) (any, error) {
+	if !core.HasStructuredContent(content) {
+		return core.ExtractTextContent(content), nil
+	}
+
+	parts, ok := core.NormalizeContentParts(content)
+	if !ok {
+		return nil, core.NewInvalidRequestError("unsupported anthropic chat content format", nil)
+	}
+
+	blocks := make([]anthropicContentBlock, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case "text":
+			if part.Text == "" {
+				continue
+			}
+			blocks = append(blocks, anthropicContentBlock{
+				Type: "text",
+				Text: part.Text,
+			})
+		case "image_url":
+			if part.ImageURL == nil || part.ImageURL.URL == "" {
+				return nil, core.NewInvalidRequestError("anthropic image content requires image_url.url", nil)
+			}
+			source, err := anthropicImageSource(part.ImageURL.URL, part.ImageURL.MediaType)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, anthropicContentBlock{
+				Type:   "image",
+				Source: source,
+			})
+		case "input_audio":
+			return nil, core.NewInvalidRequestError("anthropic chat does not support input_audio content", nil)
+		default:
+			return nil, core.NewInvalidRequestError("unsupported anthropic chat content part type: "+part.Type, nil)
+		}
+	}
+	if len(blocks) == 0 {
+		return "", nil
+	}
+	return blocks, nil
+}
+
+func anthropicImageSource(raw, mediaTypeHint string) (*anthropicContentSource, error) {
+	if strings.HasPrefix(raw, "data:") {
+		comma := strings.IndexByte(raw, ',')
+		if comma < 0 {
+			return nil, core.NewInvalidRequestError("invalid anthropic image data URL", nil)
+		}
+
+		meta := raw[len("data:"):comma]
+		tokens := strings.Split(meta, ";")
+		if len(tokens) == 0 {
+			return nil, core.NewInvalidRequestError("anthropic image data URL is missing a media type", nil)
+		}
+
+		mediaType := strings.TrimSpace(tokens[0])
+		if mediaType == "" {
+			mediaType = strings.TrimSpace(mediaTypeHint)
+		}
+
+		hasBase64 := false
+		for _, token := range tokens[1:] {
+			if strings.EqualFold(strings.TrimSpace(token), "base64") {
+				hasBase64 = true
+				break
+			}
+		}
+		if !hasBase64 {
+			return nil, core.NewInvalidRequestError("anthropic image data URL must be base64-encoded", nil)
+		}
+
+		if mediaType == "" {
+			return nil, core.NewInvalidRequestError("anthropic image data URL is missing a media type", nil)
+		}
+		if !isAllowedAnthropicImageMediaType(mediaType) {
+			return nil, core.NewInvalidRequestError("anthropic image media type is not supported: "+mediaType, nil)
+		}
+
+		data := raw[comma+1:]
+		if data == "" {
+			return nil, core.NewInvalidRequestError("anthropic image data URL is missing image data", nil)
+		}
+
+		return &anthropicContentSource{
+			Type:      "base64",
+			MediaType: mediaType,
+			Data:      data,
+		}, nil
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, core.NewInvalidRequestError("anthropic chat image_url must be a data: URL or http/https URL", nil)
+	}
+
+	return &anthropicContentSource{
+		Type: "url",
+		URL:  raw,
+	}, nil
+}
+
+func isAllowedAnthropicImageMediaType(mediaType string) bool {
+	_, ok := allowedAnthropicImageMediaTypes[strings.ToLower(strings.TrimSpace(mediaType))]
+	return ok
 }
 
 func normalizeAnthropicRequestError(err error) error {
@@ -1133,7 +1307,11 @@ func convertAnthropicResponseToResponses(resp *anthropicResponse, model string) 
 		Content:   content,
 		ToolCalls: toolCalls,
 	}
-	output := providers.BuildResponsesOutputItems(msg)
+	output := providers.BuildResponsesOutputItems(core.ResponseMessage{
+		Role:      "assistant",
+		Content:   msg.Content,
+		ToolCalls: msg.ToolCalls,
+	})
 
 	return &core.ResponsesResponse{
 		ID:        resp.ID,
@@ -1247,11 +1425,16 @@ func mapAnthropicBatchResponse(resp *anthropicBatchResponse) *core.BatchResponse
 }
 
 func buildAnthropicBatchCreateRequest(req *core.BatchRequest) (*anthropicBatchCreateRequest, map[string]string, error) {
+	const maxAnthropicBatchRequests = 10000
+
 	if req == nil {
 		return nil, nil, core.NewInvalidRequestError("request is required for anthropic batch processing", nil)
 	}
 	if len(req.Requests) == 0 {
 		return nil, nil, core.NewInvalidRequestError("requests is required for anthropic batch processing", nil)
+	}
+	if len(req.Requests) > maxAnthropicBatchRequests {
+		return nil, nil, core.NewInvalidRequestError("too many requests for anthropic batch processing", nil)
 	}
 
 	out := &anthropicBatchCreateRequest{

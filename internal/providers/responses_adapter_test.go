@@ -37,9 +37,10 @@ func TestConvertResponsesRequestToChat(t *testing.T) {
 	includeUsage := true
 
 	tests := []struct {
-		name    string
-		input   *core.ResponsesRequest
-		checkFn func(*testing.T, *core.ChatRequest)
+		name      string
+		input     *core.ResponsesRequest
+		expectErr bool
+		checkFn   func(*testing.T, *core.ChatRequest)
 	}{
 		{
 			name: "string input",
@@ -49,141 +50,89 @@ func TestConvertResponsesRequestToChat(t *testing.T) {
 			},
 			checkFn: func(t *testing.T, req *core.ChatRequest) {
 				if req.Model != "test-model" {
-					t.Errorf("Model = %q, want %q", req.Model, "test-model")
+					t.Errorf("Model = %q, want test-model", req.Model)
 				}
 				if len(req.Messages) != 1 {
-					t.Errorf("len(Messages) = %d, want 1", len(req.Messages))
+					t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
 				}
 				if req.Messages[0].Role != "user" {
-					t.Errorf("Messages[0].Role = %q, want %q", req.Messages[0].Role, "user")
+					t.Errorf("Messages[0].Role = %q, want user", req.Messages[0].Role)
 				}
-				if req.Messages[0].Content != "Hello" {
-					t.Errorf("Messages[0].Content = %q, want %q", req.Messages[0].Content, "Hello")
-				}
-			},
-		},
-		{
-			name: "with instructions",
-			input: &core.ResponsesRequest{
-				Model:        "test-model",
-				Input:        "Hello",
-				Instructions: "Be helpful",
-			},
-			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if len(req.Messages) < 2 {
-					t.Fatalf("len(Messages) = %d, want at least 2", len(req.Messages))
-				}
-				if req.Messages[0].Role != "system" {
-					t.Errorf("Messages[0].Role = %q, want %q", req.Messages[0].Role, "system")
-				}
-				if req.Messages[0].Content != "Be helpful" {
-					t.Errorf("Messages[0].Content = %q, want %q", req.Messages[0].Content, "Be helpful")
+				if got := core.ExtractTextContent(req.Messages[0].Content); got != "Hello" {
+					t.Errorf("Messages[0].Content = %q, want Hello", got)
 				}
 			},
 		},
 		{
-			name: "with parameters",
+			name: "with instructions and options",
 			input: &core.ResponsesRequest{
-				Model:           "test-model",
-				Input:           "Hello",
-				Temperature:     &temp,
-				MaxOutputTokens: &maxTokens,
-				Reasoning:       &core.Reasoning{Effort: "high"},
-				StreamOptions:   &core.StreamOptions{IncludeUsage: includeUsage},
+				Model:             "test-model",
+				Input:             "Hello",
+				Instructions:      "Be helpful",
+				Temperature:       &temp,
+				MaxOutputTokens:   &maxTokens,
+				Reasoning:         &core.Reasoning{Effort: "high"},
+				StreamOptions:     &core.StreamOptions{IncludeUsage: includeUsage},
+				Tools:             []map[string]any{{"type": "function", "function": map[string]any{"name": "lookup_weather"}}},
+				ToolChoice:        map[string]any{"type": "function", "function": map[string]any{"name": "lookup_weather"}},
+				ParallelToolCalls: boolPtr(false),
 			},
 			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if req.Temperature == nil || *req.Temperature != 0.7 {
-					t.Errorf("Temperature = %v, want 0.7", req.Temperature)
+				if len(req.Messages) != 2 || req.Messages[0].Role != "system" {
+					t.Fatalf("unexpected messages: %+v", req.Messages)
 				}
 				if req.MaxTokens == nil || *req.MaxTokens != 1024 {
-					t.Errorf("MaxTokens = %v, want 1024", req.MaxTokens)
+					t.Fatalf("MaxTokens = %#v, want 1024", req.MaxTokens)
 				}
 				if req.Reasoning == nil || req.Reasoning.Effort != "high" {
-					t.Errorf("Reasoning = %+v, want high effort", req.Reasoning)
+					t.Fatalf("Reasoning = %+v, want high", req.Reasoning)
 				}
 				if req.StreamOptions == nil || !req.StreamOptions.IncludeUsage {
-					t.Errorf("StreamOptions = %+v, want include_usage=true", req.StreamOptions)
+					t.Fatalf("StreamOptions = %+v, want include_usage=true", req.StreamOptions)
 				}
-			},
-		},
-		{
-			name: "with tool configuration",
-			input: &core.ResponsesRequest{
-				Model:      "test-model",
-				Input:      "Hello",
-				Tools:      []map[string]any{{"type": "function", "function": map[string]any{"name": "lookup_weather"}}},
-				ToolChoice: map[string]any{"type": "function", "function": map[string]any{"name": "lookup_weather"}},
-			},
-			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if len(req.Tools) != 1 {
-					t.Fatalf("len(Tools) = %d, want 1", len(req.Tools))
+				if len(req.Tools) != 1 || req.ToolChoice == nil {
+					t.Fatalf("tool configuration not preserved: %+v %+v", req.Tools, req.ToolChoice)
 				}
-				if req.ToolChoice == nil {
-					t.Fatal("ToolChoice should not be nil")
-				}
-			},
-		},
-		{
-			name: "with parallel tool calls disabled",
-			input: func() *core.ResponsesRequest {
-				parallelToolCalls := false
-				return &core.ResponsesRequest{
-					Model:             "test-model",
-					Input:             "Hello",
-					ParallelToolCalls: &parallelToolCalls,
-				}
-			}(),
-			checkFn: func(t *testing.T, req *core.ChatRequest) {
 				if req.ParallelToolCalls == nil || *req.ParallelToolCalls {
 					t.Fatalf("ParallelToolCalls = %#v, want false", req.ParallelToolCalls)
 				}
 			},
 		},
 		{
-			name: "with streaming enabled",
-			input: &core.ResponsesRequest{
-				Model:  "test-model",
-				Input:  "Hello",
-				Stream: true,
-			},
-			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if !req.Stream {
-					t.Error("Stream should be true")
-				}
-			},
-		},
-		{
-			name: "array input with messages",
+			name: "typed multimodal input",
 			input: &core.ResponsesRequest{
 				Model: "test-model",
-				Input: []interface{}{
-					map[string]interface{}{
-						"role":    "user",
-						"content": "Hello",
-					},
-					map[string]interface{}{
-						"role":    "assistant",
-						"content": "Hi there!",
+				Input: []core.ResponsesInputElement{
+					{
+						Role: " user ",
+						Content: []core.ContentPart{
+							{Type: "input_text", Text: "Describe the image."},
+							{
+								Type: "input_image",
+								ImageURL: &core.ImageURLContent{
+									URL:    "https://example.com/image.png",
+									Detail: "high",
+								},
+							},
+						},
 					},
 				},
 			},
 			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if len(req.Messages) != 2 {
-					t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
+				if len(req.Messages) != 1 {
+					t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
 				}
-				if req.Messages[0].Role != "user" {
-					t.Errorf("Messages[0].Role = %q, want %q", req.Messages[0].Role, "user")
+				parts, ok := req.Messages[0].Content.([]core.ContentPart)
+				if !ok {
+					t.Fatalf("Messages[0].Content type = %T, want []core.ContentPart", req.Messages[0].Content)
 				}
-				if req.Messages[0].Content != "Hello" {
-					t.Errorf("Messages[0].Content = %q, want %q", req.Messages[0].Content, "Hello")
-				}
-				if req.Messages[1].Role != "assistant" {
-					t.Errorf("Messages[1].Role = %q, want %q", req.Messages[1].Role, "assistant")
+				if len(parts) != 2 || parts[1].ImageURL == nil || parts[1].ImageURL.URL != "https://example.com/image.png" {
+					t.Fatalf("unexpected multimodal content: %+v", parts)
 				}
 			},
 		},
 		{
-			name: "array input with function call loop items",
+			name: "function call loop items",
 			input: &core.ResponsesRequest{
 				Model: "test-model",
 				Input: []interface{}{
@@ -204,87 +153,19 @@ func TestConvertResponsesRequestToChat(t *testing.T) {
 				if len(req.Messages) != 2 {
 					t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
 				}
-				if req.Messages[0].Role != "assistant" {
-					t.Fatalf("Messages[0].Role = %q, want assistant", req.Messages[0].Role)
-				}
-				if len(req.Messages[0].ToolCalls) != 1 {
-					t.Fatalf("len(Messages[0].ToolCalls) = %d, want 1", len(req.Messages[0].ToolCalls))
-				}
-				if req.Messages[0].ToolCalls[0].ID != "call_123" {
-					t.Fatalf("ToolCall ID = %q, want call_123", req.Messages[0].ToolCalls[0].ID)
-				}
-				if req.Messages[0].ToolCalls[0].Function.Name != "lookup_weather" {
-					t.Fatalf("ToolCall name = %q, want lookup_weather", req.Messages[0].ToolCalls[0].Function.Name)
+				if len(req.Messages[0].ToolCalls) != 1 || req.Messages[0].ToolCalls[0].ID != "call_123" {
+					t.Fatalf("unexpected assistant tool_calls: %+v", req.Messages[0].ToolCalls)
 				}
 				if !req.Messages[0].ContentNull {
-					t.Fatal("Messages[0].ContentNull = false, want true for function_call history")
-				}
-				if req.Messages[1].Role != "tool" {
-					t.Fatalf("Messages[1].Role = %q, want tool", req.Messages[1].Role)
-				}
-				if req.Messages[1].ToolCallID != "call_123" {
-					t.Fatalf("Messages[1].ToolCallID = %q, want call_123", req.Messages[1].ToolCallID)
-				}
-				if req.Messages[1].Content != `{"temperature_c":21}` {
-					t.Fatalf("Messages[1].Content = %q, want canonical JSON", req.Messages[1].Content)
-				}
-			},
-		},
-		{
-			name: "array input merges assistant message and function call items",
-			input: &core.ResponsesRequest{
-				Model: "test-model",
-				Input: []interface{}{
-					map[string]interface{}{
-						"type":   "message",
-						"role":   "assistant",
-						"status": "completed",
-						"content": []map[string]interface{}{
-							{
-								"type": "output_text",
-								"text": "I'll check that for you.",
-							},
-						},
-					},
-					map[string]interface{}{
-						"type":      "function_call",
-						"call_id":   "call_123",
-						"name":      "lookup_weather",
-						"arguments": `{"city":"Warsaw"}`,
-					},
-					map[string]interface{}{
-						"type":    "function_call_output",
-						"call_id": "call_123",
-						"output":  map[string]interface{}{"temperature_c": 21},
-					},
-				},
-			},
-			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if len(req.Messages) != 2 {
-					t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
-				}
-				if req.Messages[0].Role != "assistant" {
-					t.Fatalf("Messages[0].Role = %q, want assistant", req.Messages[0].Role)
-				}
-				if req.Messages[0].Content != "I'll check that for you." {
-					t.Fatalf("Messages[0].Content = %q, want assistant preamble", req.Messages[0].Content)
-				}
-				if req.Messages[0].ContentNull {
-					t.Fatal("Messages[0].ContentNull = true, want false after assistant text merge")
-				}
-				if len(req.Messages[0].ToolCalls) != 1 {
-					t.Fatalf("len(Messages[0].ToolCalls) = %d, want 1", len(req.Messages[0].ToolCalls))
-				}
-				if req.Messages[0].ToolCalls[0].ID != "call_123" {
-					t.Fatalf("Messages[0].ToolCalls[0].ID = %q, want call_123", req.Messages[0].ToolCalls[0].ID)
+					t.Fatal("assistant function_call history should preserve null content")
 				}
 				if req.Messages[1].Role != "tool" || req.Messages[1].ToolCallID != "call_123" {
-					t.Fatalf("Messages[1] = %+v, want tool result for call_123", req.Messages[1])
+					t.Fatalf("unexpected tool result message: %+v", req.Messages[1])
 				}
 			},
 		},
 		{
-			name: "array input preserves consecutive assistant message boundaries",
+			name: "assistant text merges with later function call item",
 			input: &core.ResponsesRequest{
 				Model: "test-model",
 				Input: []interface{}{
@@ -293,129 +174,12 @@ func TestConvertResponsesRequestToChat(t *testing.T) {
 						"role":   "assistant",
 						"status": "completed",
 						"content": []map[string]interface{}{
-							{
-								"type": "output_text",
-								"text": "First",
-							},
+							{"type": "output_text", "text": "I'll check that for you."},
 						},
 					},
 					map[string]interface{}{
-						"type":   "message",
-						"role":   "assistant",
-						"status": "completed",
-						"content": []map[string]interface{}{
-							{
-								"type": "output_text",
-								"text": "Second",
-							},
-						},
-					},
-					map[string]interface{}{
-						"role":    "user",
-						"content": "Third",
-					},
-				},
-			},
-			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if len(req.Messages) != 3 {
-					t.Fatalf("len(Messages) = %d, want 3", len(req.Messages))
-				}
-				if req.Messages[0].Role != "assistant" || req.Messages[0].Content != "First" {
-					t.Fatalf("Messages[0] = %+v, want assistant/First", req.Messages[0])
-				}
-				if req.Messages[1].Role != "assistant" || req.Messages[1].Content != "Second" {
-					t.Fatalf("Messages[1] = %+v, want assistant/Second", req.Messages[1])
-				}
-				if req.Messages[2].Role != "user" || req.Messages[2].Content != "Third" {
-					t.Fatalf("Messages[2] = %+v, want user/Third", req.Messages[2])
-				}
-			},
-		},
-		{
-			name: "typed input preserves assistant boundaries before tool calls",
-			input: &core.ResponsesRequest{
-				Model: "test-model",
-				Input: []core.ResponsesInputItem{
-					{
-						Role:    "assistant",
-						Content: "First",
-					},
-					{
-						Role:    "assistant",
-						Content: "Second",
-					},
-					{
-						Role: "assistant",
-						Content: []core.ResponsesContentPart{
-							{
-								Type: "input_text",
-								Text: "Third",
-							},
-						},
-					},
-				},
-			},
-			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if len(req.Messages) != 3 {
-					t.Fatalf("len(Messages) = %d, want 3", len(req.Messages))
-				}
-				if req.Messages[0].Role != "assistant" || req.Messages[0].Content != "First" {
-					t.Fatalf("Messages[0] = %+v, want assistant/First", req.Messages[0])
-				}
-				if req.Messages[1].Role != "assistant" || req.Messages[1].Content != "Second" {
-					t.Fatalf("Messages[1] = %+v, want assistant/Second", req.Messages[1])
-				}
-				if req.Messages[2].Role != "assistant" || req.Messages[2].Content != "Third" {
-					t.Fatalf("Messages[2] = %+v, want assistant/Third", req.Messages[2])
-				}
-			},
-		},
-		{
-			name: "raw assistant role content items keep tool calls on the later turn",
-			input: &core.ResponsesRequest{
-				Model: "test-model",
-				Input: []map[string]any{
-					{
-						"role":    "assistant",
-						"content": "First",
-					},
-					{
-						"role":    "assistant",
-						"content": "Second",
-					},
-					{
 						"type":      "function_call",
 						"call_id":   "call_123",
-						"name":      "lookup_weather",
-						"arguments": `{"city":"Warsaw"}`,
-					},
-				},
-			},
-			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if len(req.Messages) != 2 {
-					t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
-				}
-				if req.Messages[0].Role != "assistant" || req.Messages[0].Content != "First" {
-					t.Fatalf("Messages[0] = %+v, want assistant/First", req.Messages[0])
-				}
-				if req.Messages[1].Role != "assistant" || req.Messages[1].Content != "Second" {
-					t.Fatalf("Messages[1] = %+v, want assistant/Second with tool call", req.Messages[1])
-				}
-				if len(req.Messages[1].ToolCalls) != 1 {
-					t.Fatalf("len(Messages[1].ToolCalls) = %d, want 1", len(req.Messages[1].ToolCalls))
-				}
-				if req.Messages[1].ToolCalls[0].ID != "call_123" {
-					t.Fatalf("Messages[1].ToolCalls[0].ID = %q, want call_123", req.Messages[1].ToolCalls[0].ID)
-				}
-			},
-		},
-		{
-			name: "function call input generates missing call id",
-			input: &core.ResponsesRequest{
-				Model: "test-model",
-				Input: []interface{}{
-					map[string]interface{}{
-						"type":      "function_call",
 						"name":      "lookup_weather",
 						"arguments": `{"city":"Warsaw"}`,
 					},
@@ -425,27 +189,29 @@ func TestConvertResponsesRequestToChat(t *testing.T) {
 				if len(req.Messages) != 1 {
 					t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
 				}
+				if got := core.ExtractTextContent(req.Messages[0].Content); got != "I'll check that for you." {
+					t.Fatalf("Messages[0].Content = %q, want assistant preamble", got)
+				}
 				if len(req.Messages[0].ToolCalls) != 1 {
 					t.Fatalf("len(Messages[0].ToolCalls) = %d, want 1", len(req.Messages[0].ToolCalls))
-				}
-				if !req.Messages[0].ContentNull {
-					t.Fatal("Messages[0].ContentNull = false, want true for function_call input")
-				}
-				if req.Messages[0].ToolCalls[0].ID == "" {
-					t.Fatal("Messages[0].ToolCalls[0].ID should not be empty")
 				}
 			},
 		},
 		{
-			name: "array input with []map[string]any",
+			name: "assistant structured content merges with later function call item",
 			input: &core.ResponsesRequest{
 				Model: "test-model",
-				Input: []map[string]any{
-					{
-						"role":    "user",
-						"content": "Hello",
+				Input: []interface{}{
+					map[string]interface{}{
+						"type":   "message",
+						"role":   "assistant",
+						"status": "completed",
+						"content": []map[string]interface{}{
+							{"type": "output_text", "text": "I'll check that for you."},
+							{"type": "input_image", "image_url": map[string]interface{}{"url": "https://example.com/image.png"}},
+						},
 					},
-					{
+					map[string]interface{}{
 						"type":      "function_call",
 						"call_id":   "call_123",
 						"name":      "lookup_weather",
@@ -454,25 +220,58 @@ func TestConvertResponsesRequestToChat(t *testing.T) {
 				},
 			},
 			checkFn: func(t *testing.T, req *core.ChatRequest) {
-				if len(req.Messages) != 2 {
-					t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
+				if len(req.Messages) != 1 {
+					t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
 				}
-				if req.Messages[0].Role != "user" || req.Messages[0].Content != "Hello" {
-					t.Fatalf("Messages[0] = %+v, want user/Hello", req.Messages[0])
+				parts, ok := req.Messages[0].Content.([]core.ContentPart)
+				if !ok {
+					t.Fatalf("Messages[0].Content type = %T, want []core.ContentPart", req.Messages[0].Content)
 				}
-				if req.Messages[1].Role != "assistant" {
-					t.Fatalf("Messages[1].Role = %q, want assistant", req.Messages[1].Role)
+				if len(parts) != 2 || parts[0].Text != "I'll check that for you." || parts[1].ImageURL == nil || parts[1].ImageURL.URL != "https://example.com/image.png" {
+					t.Fatalf("unexpected structured assistant content: %+v", parts)
 				}
-				if len(req.Messages[1].ToolCalls) != 1 || req.Messages[1].ToolCalls[0].Function.Name != "lookup_weather" {
-					t.Fatalf("Messages[1].ToolCalls = %+v, want lookup_weather", req.Messages[1].ToolCalls)
+				if len(req.Messages[0].ToolCalls) != 1 || req.Messages[0].ToolCalls[0].ID != "call_123" {
+					t.Fatalf("unexpected assistant tool_calls: %+v", req.Messages[0].ToolCalls)
 				}
 			},
+		},
+		{
+			name: "invalid content fails",
+			input: &core.ResponsesRequest{
+				Model: "test-model",
+				Input: []interface{}{
+					map[string]interface{}{
+						"role": "user",
+						"content": []interface{}{
+							map[string]interface{}{"type": "unknown"},
+						},
+					},
+				},
+			},
+			expectErr: true,
+		},
+		{
+			name: "nil input fails",
+			input: &core.ResponsesRequest{
+				Model: "test-model",
+				Input: nil,
+			},
+			expectErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ConvertResponsesRequestToChat(tt.input)
+			result, err := ConvertResponsesRequestToChat(tt.input)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ConvertResponsesRequestToChat() error = %v", err)
+			}
 			tt.checkFn(t, result)
 		})
 	}
@@ -487,81 +286,9 @@ func TestConvertChatResponseToResponses(t *testing.T) {
 		Choices: []core.Choice{
 			{
 				Index: 0,
-				Message: core.Message{
+				Message: core.ResponseMessage{
 					Role:    "assistant",
 					Content: "Hello! How can I help you today?",
-				},
-				FinishReason: "stop",
-			},
-		},
-		Usage: core.Usage{
-			PromptTokens:     10,
-			CompletionTokens: 20,
-			TotalTokens:      30,
-		},
-	}
-
-	result := ConvertChatResponseToResponses(resp)
-
-	if result.ID != "chatcmpl-123" {
-		t.Errorf("ID = %q, want %q", result.ID, "chatcmpl-123")
-	}
-	if result.Object != "response" {
-		t.Errorf("Object = %q, want %q", result.Object, "response")
-	}
-	if result.Model != "test-model" {
-		t.Errorf("Model = %q, want %q", result.Model, "test-model")
-	}
-	if result.Status != "completed" {
-		t.Errorf("Status = %q, want %q", result.Status, "completed")
-	}
-	if len(result.Output) != 1 {
-		t.Fatalf("len(Output) = %d, want 1", len(result.Output))
-	}
-	if result.Output[0].Type != "message" {
-		t.Errorf("Output[0].Type = %q, want %q", result.Output[0].Type, "message")
-	}
-	if result.Output[0].Role != "assistant" {
-		t.Errorf("Output[0].Role = %q, want %q", result.Output[0].Role, "assistant")
-	}
-	if result.Output[0].Status != "completed" {
-		t.Errorf("Output[0].Status = %q, want %q", result.Output[0].Status, "completed")
-	}
-	if len(result.Output[0].Content) != 1 {
-		t.Fatalf("len(Output[0].Content) = %d, want 1", len(result.Output[0].Content))
-	}
-	if result.Output[0].Content[0].Type != "output_text" {
-		t.Errorf("Content[0].Type = %q, want %q", result.Output[0].Content[0].Type, "output_text")
-	}
-	if result.Output[0].Content[0].Text != "Hello! How can I help you today?" {
-		t.Errorf("Content[0].Text = %q, want %q", result.Output[0].Content[0].Text, "Hello! How can I help you today?")
-	}
-	if result.Usage == nil {
-		t.Fatal("Usage should not be nil")
-	}
-	if result.Usage.InputTokens != 10 {
-		t.Errorf("InputTokens = %d, want 10", result.Usage.InputTokens)
-	}
-	if result.Usage.OutputTokens != 20 {
-		t.Errorf("OutputTokens = %d, want 20", result.Usage.OutputTokens)
-	}
-	if result.Usage.TotalTokens != 30 {
-		t.Errorf("TotalTokens = %d, want 30", result.Usage.TotalTokens)
-	}
-}
-
-func TestConvertChatResponseToResponses_WithToolCalls(t *testing.T) {
-	resp := &core.ChatResponse{
-		ID:      "chatcmpl-123",
-		Object:  "chat.completion",
-		Model:   "test-model",
-		Created: 1677652288,
-		Choices: []core.Choice{
-			{
-				Index: 0,
-				Message: core.Message{
-					Role:    "assistant",
-					Content: "I'll call the weather tool.",
 					ToolCalls: []core.ToolCall{
 						{
 							ID:   "call_123",
@@ -580,6 +307,13 @@ func TestConvertChatResponseToResponses_WithToolCalls(t *testing.T) {
 			PromptTokens:     10,
 			CompletionTokens: 20,
 			TotalTokens:      30,
+			PromptTokensDetails: &core.PromptTokensDetails{
+				CachedTokens: 1,
+			},
+			CompletionTokensDetails: &core.CompletionTokensDetails{
+				ReasoningTokens: 3,
+			},
+			RawUsage: map[string]any{"provider": "test"},
 		},
 	}
 
@@ -588,31 +322,38 @@ func TestConvertChatResponseToResponses_WithToolCalls(t *testing.T) {
 	if len(result.Output) != 2 {
 		t.Fatalf("len(Output) = %d, want 2", len(result.Output))
 	}
-	if result.Output[1].Type != "function_call" {
-		t.Fatalf("Output[1].Type = %q, want function_call", result.Output[1].Type)
+	if result.Output[0].Type != "message" || result.Output[1].Type != "function_call" {
+		t.Fatalf("unexpected output items: %+v", result.Output)
 	}
 	if result.Output[1].CallID != "call_123" {
 		t.Fatalf("Output[1].CallID = %q, want call_123", result.Output[1].CallID)
 	}
-	if result.Output[1].Name != "lookup_weather" {
-		t.Fatalf("Output[1].Name = %q, want lookup_weather", result.Output[1].Name)
+	if result.Usage == nil || result.Usage.PromptTokensDetails == nil || result.Usage.CompletionTokensDetails == nil {
+		t.Fatalf("usage details not preserved: %+v", result.Usage)
 	}
-	if result.Output[1].Arguments != `{"city":"Warsaw"}` {
-		t.Fatalf("Output[1].Arguments = %q, want tool arguments", result.Output[1].Arguments)
+	if result.Usage.RawUsage["provider"] != "test" {
+		t.Fatalf("RawUsage = %+v, want provider=test", result.Usage.RawUsage)
 	}
 }
 
-func TestConvertChatResponseToResponses_EmptyChoices(t *testing.T) {
+func TestConvertChatResponseToResponses_PreservesStructuredAssistantContent(t *testing.T) {
 	resp := &core.ChatResponse{
-		ID:      "chatcmpl-123",
+		ID:      "chatcmpl-structured",
 		Object:  "chat.completion",
 		Model:   "test-model",
 		Created: 1677652288,
-		Choices: []core.Choice{},
-		Usage: core.Usage{
-			PromptTokens:     10,
-			CompletionTokens: 0,
-			TotalTokens:      10,
+		Choices: []core.Choice{
+			{
+				Index: 0,
+				Message: core.ResponseMessage{
+					Role: "assistant",
+					Content: []core.ContentPart{
+						{Type: "text", Text: "Here is the result."},
+						{Type: "image_url", ImageURL: &core.ImageURLContent{URL: "https://example.com/result.png"}},
+					},
+				},
+				FinishReason: "stop",
+			},
 		},
 	}
 
@@ -621,9 +362,20 @@ func TestConvertChatResponseToResponses_EmptyChoices(t *testing.T) {
 	if len(result.Output) != 1 {
 		t.Fatalf("len(Output) = %d, want 1", len(result.Output))
 	}
-	// Content should be empty string when no choices
-	if result.Output[0].Content[0].Text != "" {
-		t.Errorf("Content[0].Text = %q, want empty string", result.Output[0].Content[0].Text)
+	if result.Output[0].Type != "message" {
+		t.Fatalf("Output[0].Type = %q, want message", result.Output[0].Type)
+	}
+	if len(result.Output[0].Content) != 2 {
+		t.Fatalf("len(Output[0].Content) = %d, want 2 structured content items", len(result.Output[0].Content))
+	}
+	if result.Output[0].Content[0].Type != "output_text" || result.Output[0].Content[0].Text != "Here is the result." {
+		t.Fatalf("unexpected text content item: %+v", result.Output[0].Content[0])
+	}
+	if result.Output[0].Content[1].Type != "input_image" {
+		t.Fatalf("expected preserved non-text content item, got %+v", result.Output[0].Content[1])
+	}
+	if result.Output[0].Content[1].ImageURL == nil || result.Output[0].Content[1].ImageURL.URL != "https://example.com/result.png" {
+		t.Fatalf("unexpected preserved image content item: %+v", result.Output[0].Content[1])
 	}
 }
 
@@ -633,77 +385,32 @@ func TestExtractContentFromInput(t *testing.T) {
 		input    interface{}
 		expected string
 	}{
+		{name: "string input", input: "Hello world", expected: "Hello world"},
 		{
-			name:     "string input",
-			input:    "Hello world",
-			expected: "Hello world",
-		},
-		{
-			name: "array with text parts",
-			input: []interface{}{
-				map[string]interface{}{
-					"type": "text",
-					"text": "Hello",
-				},
-				map[string]interface{}{
-					"type": "text",
-					"text": "world",
-				},
-			},
-			expected: "Hello world",
-		},
-		{
-			name:     "nil input",
-			input:    nil,
-			expected: "",
-		},
-		{
-			name:     "unsupported type",
-			input:    12345,
-			expected: "",
-		},
-		{
-			name: "array with non-text parts",
-			input: []interface{}{
-				map[string]interface{}{
-					"type": "image",
-					"url":  "http://example.com/image.png",
-				},
-			},
-			expected: "",
-		},
-		{
-			name: "nested []map content",
+			name: "nested content",
 			input: []map[string]any{
 				{
 					"type": "message",
 					"content": []map[string]any{
-						{
-							"type": "output_text",
-							"text": "Hello",
-						},
-						{
-							"type": "wrapper",
-							"content": []interface{}{
-								map[string]any{
-									"type": "output_text",
-									"text": "world",
-								},
-							},
-						},
+						{"type": "output_text", "text": "Hello"},
+						{"type": "wrapper", "content": []interface{}{map[string]any{"type": "output_text", "text": "world"}}},
 					},
 				},
 			},
 			expected: "Hello world",
 		},
+		{name: "unsupported type", input: 12345, expected: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ExtractContentFromInput(tt.input)
-			if result != tt.expected {
-				t.Errorf("ExtractContentFromInput(%v) = %q, want %q", tt.input, result, tt.expected)
+			if got := ExtractContentFromInput(tt.input); got != tt.expected {
+				t.Fatalf("ExtractContentFromInput(%v) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

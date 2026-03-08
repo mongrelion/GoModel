@@ -896,7 +896,7 @@ func TestConvertToAnthropicRequest(t *testing.T) {
 					t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
 				}
 
-				assistantBlocks, ok := req.Messages[0].Content.([]anthropicMessageContentBlock)
+				assistantBlocks, ok := req.Messages[0].Content.([]anthropicContentBlock)
 				if !ok || len(assistantBlocks) != 1 {
 					t.Fatalf("assistant content = %#v, want one tool_use block", req.Messages[0].Content)
 				}
@@ -904,7 +904,7 @@ func TestConvertToAnthropicRequest(t *testing.T) {
 					t.Fatalf("assistant tool block = %+v, want lookup_weather/call_123", assistantBlocks[0])
 				}
 
-				toolBlocks, ok := req.Messages[1].Content.([]anthropicMessageContentBlock)
+				toolBlocks, ok := req.Messages[1].Content.([]anthropicContentBlock)
 				if !ok || len(toolBlocks) != 1 {
 					t.Fatalf("tool content = %#v, want one tool_result block", req.Messages[1].Content)
 				}
@@ -922,7 +922,7 @@ func TestConvertToAnthropicRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := convertToAnthropicRequest(tt.input)
 			if err != nil {
-				t.Fatalf("convertToAnthropicRequest() error = %v, want nil", err)
+				t.Fatalf("convertToAnthropicRequest() error = %v", err)
 			}
 			tt.checkFn(t, result)
 		})
@@ -1328,7 +1328,7 @@ func TestConvertToAnthropicRequest_NormalizesToolCallIDAndName(t *testing.T) {
 		t.Fatalf("convertToAnthropicRequest() error = %v, want nil", err)
 	}
 
-	blocks, ok := result.Messages[0].Content.([]anthropicMessageContentBlock)
+	blocks, ok := result.Messages[0].Content.([]anthropicContentBlock)
 	if !ok || len(blocks) != 1 {
 		t.Fatalf("content = %#v, want one tool_use block", result.Messages[0].Content)
 	}
@@ -1351,7 +1351,7 @@ func TestConvertToAnthropicRequest_NormalizesToolResultID(t *testing.T) {
 		t.Fatalf("convertToAnthropicRequest() error = %v, want nil", err)
 	}
 
-	blocks, ok := result.Messages[0].Content.([]anthropicMessageContentBlock)
+	blocks, ok := result.Messages[0].Content.([]anthropicContentBlock)
 	if !ok || len(blocks) != 1 {
 		t.Fatalf("content = %#v, want one tool_result block", result.Messages[0].Content)
 	}
@@ -2483,7 +2483,7 @@ func TestConvertResponsesRequestToAnthropic(t *testing.T) {
 					t.Fatalf("len(Messages) = %d, want 2", len(req.Messages))
 				}
 
-				assistantBlocks, ok := req.Messages[0].Content.([]anthropicMessageContentBlock)
+				assistantBlocks, ok := req.Messages[0].Content.([]anthropicContentBlock)
 				if !ok || len(assistantBlocks) != 1 {
 					t.Fatalf("assistant content = %#v, want one tool_use block", req.Messages[0].Content)
 				}
@@ -2491,7 +2491,7 @@ func TestConvertResponsesRequestToAnthropic(t *testing.T) {
 					t.Fatalf("assistant tool block = %+v, want lookup_weather/call_123", assistantBlocks[0])
 				}
 
-				toolBlocks, ok := req.Messages[1].Content.([]anthropicMessageContentBlock)
+				toolBlocks, ok := req.Messages[1].Content.([]anthropicContentBlock)
 				if !ok || len(toolBlocks) != 1 {
 					t.Fatalf("tool content = %#v, want one tool_result block", req.Messages[1].Content)
 				}
@@ -2509,7 +2509,7 @@ func TestConvertResponsesRequestToAnthropic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := convertResponsesRequestToAnthropic(tt.input)
 			if err != nil {
-				t.Fatalf("convertResponsesRequestToAnthropic() error = %v, want nil", err)
+				t.Fatalf("convertResponsesRequestToAnthropic() error = %v", err)
 			}
 			tt.checkFn(t, result)
 		})
@@ -2994,7 +2994,7 @@ func TestConvertToAnthropicRequest_ReasoningEffort(t *testing.T) {
 
 			result, err := convertToAnthropicRequest(req)
 			if err != nil {
-				t.Fatalf("convertToAnthropicRequest() error = %v, want nil", err)
+				t.Fatalf("convertToAnthropicRequest() error = %v", err)
 			}
 
 			if tt.expectedThinkType == "" {
@@ -3160,7 +3160,7 @@ func TestConvertResponsesRequestToAnthropic_ReasoningEffort(t *testing.T) {
 
 			result, err := convertResponsesRequestToAnthropic(req)
 			if err != nil {
-				t.Fatalf("convertResponsesRequestToAnthropic() error = %v, want nil", err)
+				t.Fatalf("convertResponsesRequestToAnthropic() error = %v", err)
 			}
 
 			if tt.expectedThinkType == "" {
@@ -3232,6 +3232,460 @@ func TestIsAdaptiveThinkingModel(t *testing.T) {
 	}
 }
 
+func TestConvertToAnthropicRequest_MultimodalImageContent(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Messages: []core.Message{
+			{
+				Role: "user",
+				Content: []core.ContentPart{
+					{Type: "text", Text: "Describe the image."},
+					{
+						Type: "image_url",
+						ImageURL: &core.ImageURLContent{
+							URL: "data:image/png;base64,ZmFrZQ==",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := convertToAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("convertToAnthropicRequest() error = %v", err)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(result.Messages))
+	}
+
+	blocks, ok := result.Messages[0].Content.([]anthropicContentBlock)
+	if !ok {
+		t.Fatalf("message content type = %T, want []anthropicContentBlock", result.Messages[0].Content)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("len(blocks) = %d, want 2", len(blocks))
+	}
+	if blocks[0].Type != "text" || blocks[0].Text != "Describe the image." {
+		t.Fatalf("unexpected first block: %+v", blocks[0])
+	}
+	if blocks[1].Type != "image" || blocks[1].Source == nil || blocks[1].Source.MediaType != "image/png" || blocks[1].Source.Data != "ZmFrZQ==" {
+		t.Fatalf("unexpected second block: %+v", blocks[1])
+	}
+}
+
+func TestConvertToAnthropicRequest_PreservesAllSystemMessages(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Messages: []core.Message{
+			{Role: "system", Content: "first system"},
+			{Role: "system", Content: "second system"},
+			{Role: "user", Content: "hello"},
+		},
+	}
+
+	result, err := convertToAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("convertToAnthropicRequest() error = %v", err)
+	}
+	if result.System != "first system\n\nsecond system" {
+		t.Fatalf("System = %q, want merged system text", result.System)
+	}
+}
+
+func TestConvertToAnthropicRequest_RejectsNilRequest(t *testing.T) {
+	_, err := convertToAnthropicRequest(nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "anthropic chat request is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConvertToAnthropicRequest_MultimodalImageContent_DataURLWithExtraMetadata(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Messages: []core.Message{
+			{
+				Role: "user",
+				Content: []core.ContentPart{
+					{
+						Type: "image_url",
+						ImageURL: &core.ImageURLContent{
+							URL: "data:image/png;charset=utf-8;BASE64,ZmFrZQ==",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := convertToAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("convertToAnthropicRequest() error = %v", err)
+	}
+	blocks, ok := result.Messages[0].Content.([]anthropicContentBlock)
+	if !ok || len(blocks) != 1 || blocks[0].Source == nil {
+		t.Fatalf("unexpected image block: %#v", result.Messages[0].Content)
+	}
+	if blocks[0].Source.Type != "base64" || blocks[0].Source.MediaType != "image/png" || blocks[0].Source.Data != "ZmFrZQ==" {
+		t.Fatalf("unexpected image source: %+v", blocks[0].Source)
+	}
+}
+
+func TestConvertToAnthropicRequest_RejectsInputAudio(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Messages: []core.Message{
+			{
+				Role: "user",
+				Content: []core.ContentPart{
+					{
+						Type: "input_audio",
+						InputAudio: &core.InputAudioContent{
+							Data:   "abc",
+							Format: "wav",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := convertToAnthropicRequest(req)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "input_audio") {
+		t.Fatalf("expected input_audio error, got %v", err)
+	}
+}
+
+func TestConvertToAnthropicRequest_MultimodalRemoteImageContent(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Messages: []core.Message{
+			{
+				Role: "user",
+				Content: []core.ContentPart{
+					{
+						Type: "image_url",
+						ImageURL: &core.ImageURLContent{
+							URL:       "https://example.com/image.png",
+							MediaType: "image/png",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := convertToAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("convertToAnthropicRequest() error = %v", err)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(result.Messages))
+	}
+
+	blocks, ok := result.Messages[0].Content.([]anthropicContentBlock)
+	if !ok {
+		t.Fatalf("message content type = %T, want []anthropicContentBlock", result.Messages[0].Content)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("len(blocks) = %d, want 1", len(blocks))
+	}
+	if blocks[0].Type != "image" || blocks[0].Source == nil {
+		t.Fatalf("unexpected image block: %+v", blocks[0])
+	}
+	if blocks[0].Source.Type != "url" || blocks[0].Source.URL != "https://example.com/image.png" {
+		t.Fatalf("unexpected image source: %+v", blocks[0].Source)
+	}
+	if blocks[0].Source.Data != "" || blocks[0].Source.MediaType != "" {
+		t.Fatalf("expected url source without data/media_type, got %+v", blocks[0].Source)
+	}
+}
+
+func TestConvertToAnthropicRequest_AllowsRemoteImageWithoutMediaType(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Messages: []core.Message{
+			{
+				Role: "user",
+				Content: []core.ContentPart{
+					{
+						Type: "image_url",
+						ImageURL: &core.ImageURLContent{
+							URL: "https://example.com/image.png",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := convertToAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("convertToAnthropicRequest() error = %v", err)
+	}
+	blocks, ok := result.Messages[0].Content.([]anthropicContentBlock)
+	if !ok || len(blocks) != 1 || blocks[0].Source == nil {
+		t.Fatalf("unexpected image block: %#v", result.Messages[0].Content)
+	}
+	if blocks[0].Source.Type != "url" || blocks[0].Source.URL != "https://example.com/image.png" {
+		t.Fatalf("unexpected image source: %+v", blocks[0].Source)
+	}
+	if blocks[0].Source.MediaType != "" {
+		t.Fatalf("expected media_type to be omitted for url source, got %+v", blocks[0].Source)
+	}
+}
+
+func TestConvertToAnthropicRequest_IgnoresRemoteImageMediaTypeHint(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Messages: []core.Message{
+			{
+				Role: "user",
+				Content: []core.ContentPart{
+					{
+						Type: "image_url",
+						ImageURL: &core.ImageURLContent{
+							URL:       "https://example.com/image.svg",
+							MediaType: "image/svg+xml",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := convertToAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("convertToAnthropicRequest() error = %v", err)
+	}
+	blocks, ok := result.Messages[0].Content.([]anthropicContentBlock)
+	if !ok || len(blocks) != 1 || blocks[0].Source == nil {
+		t.Fatalf("unexpected image block: %#v", result.Messages[0].Content)
+	}
+	if blocks[0].Source.Type != "url" || blocks[0].Source.URL != "https://example.com/image.svg" {
+		t.Fatalf("unexpected image source: %+v", blocks[0].Source)
+	}
+	if blocks[0].Source.MediaType != "" {
+		t.Fatalf("expected media_type to be omitted for url source, got %+v", blocks[0].Source)
+	}
+}
+
+func TestConvertToAnthropicRequest_RejectsInvalidRemoteImageURLs(t *testing.T) {
+	tests := []string{
+		"https:",
+		"https://",
+		"/relative/path.png",
+	}
+
+	for _, rawURL := range tests {
+		t.Run(rawURL, func(t *testing.T) {
+			req := &core.ChatRequest{
+				Model: "claude-sonnet-4-5-20250929",
+				Messages: []core.Message{
+					{
+						Role: "user",
+						Content: []core.ContentPart{
+							{
+								Type: "image_url",
+								ImageURL: &core.ImageURLContent{
+									URL: rawURL,
+								},
+							},
+						},
+					},
+				},
+			}
+
+			_, err := convertToAnthropicRequest(req)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), "anthropic chat image_url must be a data: URL or http/https URL") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestConvertResponsesRequestToAnthropic_RejectsInvalidInputItems(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []interface{}
+	}{
+		{
+			name: "non-object item",
+			input: []interface{}{
+				"bad-item",
+			},
+		},
+		{
+			name: "missing role",
+			input: []interface{}{
+				map[string]interface{}{
+					"content": []interface{}{
+						map[string]interface{}{
+							"type": "input_text",
+							"text": "hello",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "invalid content",
+			input: []interface{}{
+				map[string]interface{}{
+					"role": "user",
+					"content": []interface{}{
+						map[string]interface{}{
+							"type": "unknown",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := convertResponsesRequestToAnthropic(&core.ResponsesRequest{
+				Model: "claude-sonnet-4-5-20250929",
+				Input: tt.input,
+			})
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), "invalid responses input item") {
+				t.Fatalf("expected invalid responses input item error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestConvertResponsesRequestToAnthropic_RejectsUnsupportedInputType(t *testing.T) {
+	_, err := convertResponsesRequestToAnthropic(&core.ResponsesRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Input: 123,
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid responses input: unsupported type") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConvertResponsesRequestToAnthropic_TrimsRoleBeforeAppend(t *testing.T) {
+	req, err := convertResponsesRequestToAnthropic(&core.ResponsesRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Input: []interface{}{
+			map[string]interface{}{
+				"role":    "  user  ",
+				"content": "hello",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("convertResponsesRequestToAnthropic() error = %v", err)
+	}
+	if len(req.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
+	}
+	if req.Messages[0].Role != "user" {
+		t.Fatalf("Messages[0].Role = %q, want user", req.Messages[0].Role)
+	}
+}
+
+func TestConvertResponsesRequestToAnthropic_PreservesAllSystemMessages(t *testing.T) {
+	req, err := convertResponsesRequestToAnthropic(&core.ResponsesRequest{
+		Model:        "claude-sonnet-4-5-20250929",
+		Instructions: "instruction system",
+		Input: []core.ResponsesInputElement{
+			{
+				Role:    "system",
+				Content: "input system",
+			},
+			{
+				Role:    "user",
+				Content: "hello",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("convertResponsesRequestToAnthropic() error = %v", err)
+	}
+	if req.System != "instruction system\n\ninput system" {
+		t.Fatalf("System = %q, want merged system text", req.System)
+	}
+}
+
+func TestConvertResponsesRequestToAnthropic_RejectsNilRequest(t *testing.T) {
+	_, err := convertResponsesRequestToAnthropic(nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "anthropic responses request is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConvertResponsesRequestToAnthropic_TypedInputPromotesSystemRole(t *testing.T) {
+	req, err := convertResponsesRequestToAnthropic(&core.ResponsesRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Input: []core.ResponsesInputElement{
+			{
+				Role:    "system",
+				Content: "be concise",
+			},
+			{
+				Role: " user ",
+				Content: []core.ContentPart{
+					{Type: "input_text", Text: "hello"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("convertResponsesRequestToAnthropic() error = %v", err)
+	}
+	if req.System != "be concise" {
+		t.Fatalf("System = %q, want be concise", req.System)
+	}
+	if len(req.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
+	}
+	if req.Messages[0].Role != "user" {
+		t.Fatalf("Messages[0].Role = %q, want user", req.Messages[0].Role)
+	}
+	if req.Messages[0].Content != "hello" {
+		t.Fatalf("Messages[0].Content = %#v, want hello", req.Messages[0].Content)
+	}
+}
+
+func TestConvertResponsesRequestToAnthropic_ToolRoleRequiresToolCallID(t *testing.T) {
+	_, err := convertResponsesRequestToAnthropic(&core.ResponsesRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Input: []core.ResponsesInputElement{
+			{
+				Role:    "tool",
+				Content: "hello",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "tool message is missing tool_call_id") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestEmbeddings_ReturnsUnsupportedError(t *testing.T) {
 	p := &Provider{}
 	_, err := p.Embeddings(context.Background(), &core.EmbeddingRequest{
@@ -3251,6 +3705,48 @@ func TestEmbeddings_ReturnsUnsupportedError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "anthropic does not support embeddings") {
 		t.Errorf("expected message about anthropic not supporting embeddings, got: %s", err.Error())
+	}
+}
+
+func TestConvertToAnthropicRequest_NormalizesInputTextType(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4-5-20250929",
+		Messages: []core.Message{
+			{
+				Role: "user",
+				Content: []core.ContentPart{
+					{Type: "input_text", Text: "First part."},
+					{Type: "input_text", Text: "Second part."},
+				},
+			},
+		},
+	}
+
+	result, err := convertToAnthropicRequest(req)
+	if err != nil {
+		t.Fatalf("convertToAnthropicRequest() error = %v", err)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(result.Messages))
+	}
+
+	blocks, ok := result.Messages[0].Content.([]anthropicContentBlock)
+	if !ok {
+		t.Fatalf("message content type = %T, want []anthropicContentBlock", result.Messages[0].Content)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("len(blocks) = %d, want 2", len(blocks))
+	}
+	for i, block := range blocks {
+		if block.Type != "text" {
+			t.Errorf("blocks[%d].Type = %q, want \"text\"", i, block.Type)
+		}
+	}
+	if blocks[0].Text != "First part." {
+		t.Errorf("blocks[0].Text = %q, want \"First part.\"", blocks[0].Text)
+	}
+	if blocks[1].Text != "Second part." {
+		t.Errorf("blocks[1].Text = %q, want \"Second part.\"", blocks[1].Text)
 	}
 }
 
