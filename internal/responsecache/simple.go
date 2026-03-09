@@ -140,6 +140,12 @@ type responseCapture struct {
 	body *bytes.Buffer
 }
 
+func (r *responseCapture) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func (r *responseCapture) Write(b []byte) (int, error) {
 	// Write to the underlying ResponseWriter first so the client always receives
 	// the response. Buffer a copy separately for cache storage only.
