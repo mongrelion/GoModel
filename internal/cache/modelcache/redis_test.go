@@ -70,6 +70,17 @@ func TestRedisModelCache_DefaultKeyAndTTL(t *testing.T) {
 	c := NewRedisModelCacheWithStore(store, "", 0)
 	defer c.Close()
 
+	rc, ok := c.(*redisModelCache)
+	if !ok {
+		t.Fatal("expected *redisModelCache from NewRedisModelCacheWithStore")
+	}
+	if rc.key != DefaultRedisKey {
+		t.Errorf("key = %q, want %q", rc.key, DefaultRedisKey)
+	}
+	if rc.ttl != cache.DefaultRedisTTL {
+		t.Errorf("ttl = %v, want %v", rc.ttl, cache.DefaultRedisTTL)
+	}
+
 	ctx := context.Background()
 	mc := &ModelCache{
 		UpdatedAt: time.Now(),
