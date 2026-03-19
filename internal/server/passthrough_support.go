@@ -12,6 +12,8 @@ import (
 
 	"gomodel/internal/auditlog"
 	"gomodel/internal/core"
+	"gomodel/internal/streaming"
+	"gomodel/internal/usage"
 )
 
 var defaultEnabledPassthroughProviders = []string{"openai", "anthropic"}
@@ -249,14 +251,37 @@ func (s *passthroughService) proxyPassthroughResponse(c *echo.Context, providerT
 			streamEntry.StatusCode = resp.StatusCode
 		}
 
-		wrappedStream := auditlog.WrapStreamForLogging(resp.Body, s.logger, streamEntry, passthroughAuditPath(c, providerType, endpoint, info))
-		defer func() {
-			_ = wrappedStream.Close()
-		}()
+		requestID := requestIDFromContextOrHeader(c.Request())
+		auditPath := passthroughAuditPath(c, providerType, endpoint, info)
+		usagePath := auditPath
+		if requestPath := strings.TrimSpace(c.Request().URL.Path); requestPath != "" {
+			usagePath = requestPath
+		}
+		model := ""
+		if info != nil {
+			model = strings.TrimSpace(info.Model)
+		}
+		model = resolvedModelFromPlan(core.GetExecutionPlan(c.Request().Context()), model)
+
+		observers := make([]streaming.Observer, 0, 2)
+		if observer := auditlog.NewStreamLogObserver(s.logger, streamEntry, auditPath); observer != nil {
+			observers = append(observers, observer)
+		}
+		if s.usageLogger != nil && s.usageLogger.Config().Enabled {
+			if observer := usage.NewStreamUsageObserver(s.usageLogger, model, providerType, requestID, usagePath, s.pricingResolver); observer != nil {
+				observers = append(observers, observer)
+			}
+		}
+		wrappedStream := streaming.NewObservedSSEStream(resp.Body, observers...)
+		if len(observers) > 0 {
+			defer func() {
+				_ = wrappedStream.Close()
+			}()
+		}
 
 		c.Response().WriteHeader(resp.StatusCode)
 		if err := flushStream(c.Response(), wrappedStream); err != nil {
-			recordStreamingError(streamEntry, "", providerType, c.Request().URL.Path, requestIDFromContextOrHeader(c.Request()), err)
+			recordStreamingError(streamEntry, model, providerType, c.Request().URL.Path, requestID, err)
 			return err
 		}
 		return nil

@@ -209,6 +209,19 @@ func (r *erroringReadCloser) Close() error {
 	return nil
 }
 
+type closeCountingReadCloser struct {
+	io.ReadCloser
+	closes int
+}
+
+func (r *closeCountingReadCloser) Close() error {
+	r.closes++
+	if r.ReadCloser == nil {
+		return nil
+	}
+	return r.ReadCloser.Close()
+}
+
 func setPathParam(c *echo.Context, name, value string) {
 	c.SetPathValues(echo.PathValues{{Name: name, Value: value}})
 }
@@ -2001,7 +2014,7 @@ func TestHandleStreamingResponse_FlushesEachChunk(t *testing.T) {
 		},
 	}
 
-	err := handler.handleStreamingResponse(c, "gpt-4o-mini", "openai", func() (io.ReadCloser, error) {
+	err := handler.translatedInference().handleStreamingResponse(c, "gpt-4o-mini", "openai", func() (io.ReadCloser, error) {
 		return stream, nil
 	})
 	if err != nil {
@@ -2093,7 +2106,7 @@ func TestHandleStreamingResponse_RecordsStreamingError(t *testing.T) {
 		Data:      &auditlog.LogData{},
 	})
 
-	err := handler.handleStreamingResponse(c, "gpt-4o-mini", "openai", func() (io.ReadCloser, error) {
+	err := handler.translatedInference().handleStreamingResponse(c, "gpt-4o-mini", "openai", func() (io.ReadCloser, error) {
 		return &erroringReadCloser{
 			data: []byte("data: {\"id\":\"1\"}\n\n"),
 			err:  expectedErr,
@@ -5410,6 +5423,144 @@ func TestProviderPassthrough_AnthropicStream(t *testing.T) {
 	}
 	if got := rec.Body.String(); !strings.Contains(got, "message_start") {
 		t.Fatalf("unexpected stream body: %q", got)
+	}
+}
+
+func TestProviderPassthrough_StreamWithoutObserversClosesUpstreamBodyOnce(t *testing.T) {
+	body := &closeCountingReadCloser{
+		ReadCloser: &chunkedReadCloser{
+			chunks: [][]byte{
+				[]byte("event: message_start\n"),
+				[]byte("data: {\"type\":\"message_start\"}\n\n"),
+			},
+		},
+	}
+	provider := &mockProvider{
+		passthroughResponse: &core.PassthroughResponse{
+			StatusCode: http.StatusOK,
+			Headers: map[string][]string{
+				"Content-Type": {"text/event-stream"},
+			},
+			Body: body,
+		},
+	}
+
+	e := echo.New()
+	handler := NewHandler(provider, nil, nil, nil)
+	e.POST("/p/:provider/*", handler.ProviderPassthrough)
+
+	req := httptest.NewRequest(http.MethodPost, "/p/anthropic/messages", strings.NewReader(`{"model":"claude-sonnet-4-5"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := &flushCountingRecorder{ResponseRecorder: httptest.NewRecorder()}
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if body.closes != 1 {
+		t.Fatalf("Close calls = %d, want 1", body.closes)
+	}
+}
+
+func TestProviderPassthrough_OpenAIStreamWritesUsageEntry(t *testing.T) {
+	provider := &mockProvider{
+		passthroughResponse: &core.PassthroughResponse{
+			StatusCode: http.StatusOK,
+			Headers: map[string][]string{
+				"Content-Type": {"text/event-stream"},
+			},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {\"id\":\"resp-123\",\"model\":\"gpt-5-mini\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"total_tokens\":10}}\n\n" +
+					"data: [DONE]\n\n",
+			)),
+		},
+	}
+	usageLog := &collectingUsageLogger{
+		config: usage.Config{Enabled: true},
+	}
+
+	e := echo.New()
+	handler := NewHandler(provider, nil, usageLog, nil)
+	e.POST("/p/:provider/*", handler.ProviderPassthrough)
+
+	req := httptest.NewRequest(http.MethodPost, "/p/openai/responses", strings.NewReader(`{"model":"gpt-5-mini"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "req-pass-stream-usage")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(usageLog.entries) != 1 {
+		t.Fatalf("usage entries = %d, want 1", len(usageLog.entries))
+	}
+
+	entry := usageLog.entries[0]
+	if entry.Provider != "openai" {
+		t.Fatalf("Provider = %q, want openai", entry.Provider)
+	}
+	if entry.Endpoint != "/p/openai/responses" {
+		t.Fatalf("Endpoint = %q, want /p/openai/responses", entry.Endpoint)
+	}
+	if entry.Model != "gpt-5-mini" {
+		t.Fatalf("Model = %q, want gpt-5-mini", entry.Model)
+	}
+	if entry.TotalTokens != 10 {
+		t.Fatalf("TotalTokens = %d, want 10", entry.TotalTokens)
+	}
+	if entry.RequestID != "req-pass-stream-usage" {
+		t.Fatalf("RequestID = %q, want req-pass-stream-usage", entry.RequestID)
+	}
+}
+
+func TestProviderPassthrough_OpenAIStreamUsageKeepsClientVisibleRoute(t *testing.T) {
+	provider := &mockProvider{
+		passthroughResponse: &core.PassthroughResponse{
+			StatusCode: http.StatusOK,
+			Headers: map[string][]string{
+				"Content-Type": {"text/event-stream"},
+			},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {\"id\":\"resp-123\",\"model\":\"gpt-5-mini\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"total_tokens\":10}}\n\n" +
+					"data: [DONE]\n\n",
+			)),
+		},
+	}
+	usageLog := &collectingUsageLogger{
+		config: usage.Config{Enabled: true},
+	}
+
+	e := echo.New()
+	handler := NewHandler(provider, nil, usageLog, nil)
+	e.POST("/p/:provider/*", handler.ProviderPassthrough)
+
+	req := httptest.NewRequest(http.MethodPost, "/p/openai/v1/responses", strings.NewReader(`{"model":"gpt-5-mini"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "req-pass-stream-visible-path")
+	req = req.WithContext(core.WithExecutionPlan(req.Context(), &core.ExecutionPlan{
+		Mode:         core.ExecutionModePassthrough,
+		ProviderType: "openai",
+		Passthrough: &core.PassthroughRouteInfo{
+			Provider:           "openai",
+			RawEndpoint:        "v1/responses",
+			NormalizedEndpoint: "responses",
+			AuditPath:          "/v1/responses",
+			Model:              "gpt-5-mini",
+		},
+	}))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(usageLog.entries) != 1 {
+		t.Fatalf("usage entries = %d, want 1", len(usageLog.entries))
+	}
+	if got := usageLog.entries[0].Endpoint; got != "/p/openai/v1/responses" {
+		t.Fatalf("Endpoint = %q, want /p/openai/v1/responses", got)
 	}
 }
 
