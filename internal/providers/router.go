@@ -35,6 +35,10 @@ type providerTypeLister interface {
 	ProviderTypes() []string
 }
 
+type publicModelLister interface {
+	ListPublicModels() []core.Model
+}
+
 func registryUnavailableError(err error) error {
 	return core.NewProviderError("", http.StatusServiceUnavailable, err.Error(), err)
 }
@@ -306,7 +310,12 @@ func (r *Router) ListModels(_ context.Context) (*core.ModelsResponse, error) {
 	if err := r.checkReady(); err != nil {
 		return nil, registryUnavailableError(err)
 	}
-	models := r.lookup.ListModels()
+	var models []core.Model
+	if public, ok := r.lookup.(publicModelLister); ok {
+		models = public.ListPublicModels()
+	} else {
+		models = r.lookup.ListModels()
+	}
 	return &core.ModelsResponse{
 		Object: "list",
 		Data:   models,

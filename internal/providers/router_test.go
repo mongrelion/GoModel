@@ -18,6 +18,9 @@ type mockModelLookup struct {
 	models        map[string]core.Provider
 	providerTypes map[string]string
 	modelList     []core.Model
+	publicModels  []core.Model
+	listCalls     int
+	publicCalls   int
 }
 
 func newMockLookup() *mockModelLookup {
@@ -31,6 +34,10 @@ func (m *mockModelLookup) addModel(model string, provider core.Provider, provide
 	m.models[model] = provider
 	m.providerTypes[model] = providerType
 	m.modelList = append(m.modelList, core.Model{ID: model, Object: "model"})
+}
+
+func (m *mockModelLookup) setPublicModels(models []core.Model) {
+	m.publicModels = append([]core.Model(nil), models...)
 }
 
 func (m *mockModelLookup) Supports(model string) bool {
@@ -47,7 +54,13 @@ func (m *mockModelLookup) GetProviderType(model string) string {
 }
 
 func (m *mockModelLookup) ListModels() []core.Model {
+	m.listCalls++
 	return m.modelList
+}
+
+func (m *mockModelLookup) ListPublicModels() []core.Model {
+	m.publicCalls++
+	return append([]core.Model(nil), m.publicModels...)
 }
 
 func (m *mockModelLookup) ModelCount() int {
@@ -547,7 +560,11 @@ func TestRouterResponses(t *testing.T) {
 func TestRouterListModels(t *testing.T) {
 	lookup := newMockLookup()
 	lookup.addModel("gpt-4o", &mockProvider{}, "openai")
-	lookup.addModel("claude-3-5-sonnet", &mockProvider{}, "anthropic")
+	lookup.setPublicModels([]core.Model{
+		{ID: "openai/gpt-4o", Object: "model", OwnedBy: "openai"},
+		{ID: "openrouter/gpt-4o", Object: "model", OwnedBy: "openrouter"},
+		{ID: "azure-openai/gpt-4o", Object: "model", OwnedBy: "azure-openai"},
+	})
 
 	router, _ := NewRouter(lookup)
 
@@ -556,11 +573,30 @@ func TestRouterListModels(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(resp.Data) != 2 {
-		t.Errorf("expected 2 models, got %d", len(resp.Data))
+	if len(resp.Data) != 3 {
+		t.Errorf("expected 3 models, got %d", len(resp.Data))
 	}
 	if resp.Object != "list" {
 		t.Errorf("expected object 'list', got %q", resp.Object)
+	}
+	if lookup.listCalls != 0 {
+		t.Fatalf("ListModels() called %d times, want 0 when publicModelLister is available", lookup.listCalls)
+	}
+	if lookup.publicCalls != 1 {
+		t.Fatalf("ListPublicModels() called %d times, want 1", lookup.publicCalls)
+	}
+	want := []core.Model{
+		{ID: "openai/gpt-4o", Object: "model", OwnedBy: "openai"},
+		{ID: "openrouter/gpt-4o", Object: "model", OwnedBy: "openrouter"},
+		{ID: "azure-openai/gpt-4o", Object: "model", OwnedBy: "azure-openai"},
+	}
+	for i, model := range want {
+		if resp.Data[i].ID != model.ID {
+			t.Fatalf("resp.Data[%d].ID = %q, want %q", i, resp.Data[i].ID, model.ID)
+		}
+		if resp.Data[i].OwnedBy != model.OwnedBy {
+			t.Fatalf("resp.Data[%d].OwnedBy = %q, want %q", i, resp.Data[i].OwnedBy, model.OwnedBy)
+		}
 	}
 }
 

@@ -437,6 +437,9 @@ func (r *ModelRegistry) GetProvider(model string) core.Provider {
 				return info.Provider
 			}
 		}
+		if r.hasConfiguredProviderNameLocked(providerName) {
+			return nil
+		}
 		// Fall through: the slash may be part of the model ID (e.g. "meta-llama/Meta-Llama-3-70B")
 	}
 
@@ -458,6 +461,9 @@ func (r *ModelRegistry) GetModel(model string) *ModelInfo {
 			if info, exists := providerModels[modelID]; exists {
 				return info
 			}
+		}
+		if r.hasConfiguredProviderNameLocked(providerName) {
+			return nil
 		}
 		// Fall through: the slash may be part of the model ID
 	}
@@ -482,6 +488,9 @@ func (r *ModelRegistry) LookupModel(model string) (*core.Model, bool) {
 				return &cloned, true
 			}
 		}
+		if r.hasConfiguredProviderNameLocked(providerName) {
+			return nil, false
+		}
 		// Fall through: the slash may be part of the model ID
 	}
 
@@ -503,6 +512,9 @@ func (r *ModelRegistry) Supports(model string) bool {
 			if _, exists := providerModels[modelID]; exists {
 				return true
 			}
+		}
+		if r.hasConfiguredProviderNameLocked(providerName) {
+			return false
 		}
 		// Fall through: the slash may be part of the model ID
 	}
@@ -539,6 +551,30 @@ func (r *ModelRegistry) ListModels() []core.Model {
 	return append([]core.Model(nil), models...)
 }
 
+// ListPublicModels returns all provider-backed models as public selectors in
+// providerName/modelID form, sorted by public model ID.
+func (r *ModelRegistry) ListPublicModels() []core.Model {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	total := 0
+	for _, models := range r.modelsByProvider {
+		total += len(models)
+	}
+
+	result := make([]core.Model, 0, total)
+	for providerName, models := range r.modelsByProvider {
+		for modelID, info := range models {
+			model := info.Model
+			model.ID = qualifyPublicModelID(providerName, modelID)
+			model.OwnedBy = providerName
+			result = append(result, model)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
 // ModelCount returns the number of registered models
 func (r *ModelRegistry) ModelCount() int {
 	r.mu.RLock()
@@ -558,6 +594,9 @@ func (r *ModelRegistry) GetProviderType(model string) string {
 			if info, exists := providerModels[modelID]; exists {
 				return r.providerTypes[info.Provider]
 			}
+		}
+		if r.hasConfiguredProviderNameLocked(providerName) {
+			return ""
 		}
 		// Fall through: the slash may be part of the model ID
 	}
@@ -625,6 +664,31 @@ func splitModelSelector(model string) (providerName, modelID string) {
 		return "", model
 	}
 	return providerName, modelID
+}
+
+func qualifyPublicModelID(providerName, modelID string) string {
+	providerName = strings.TrimSpace(providerName)
+	modelID = strings.TrimSpace(modelID)
+	if providerName == "" {
+		return modelID
+	}
+	if modelID == "" {
+		return providerName
+	}
+	return providerName + "/" + modelID
+}
+
+func (r *ModelRegistry) hasConfiguredProviderNameLocked(providerName string) bool {
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return false
+	}
+	for _, configuredName := range r.providerNames {
+		if configuredName == providerName {
+			return true
+		}
+	}
+	return false
 }
 
 // ModelWithProvider holds a model alongside its provider type string.
