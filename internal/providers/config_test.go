@@ -8,9 +8,9 @@ import (
 )
 
 // ptr helpers
-func intPtr(v int) *int               { return &v }
+func intPtr(v int) *int                     { return &v }
 func durPtr(v time.Duration) *time.Duration { return &v }
-func f64Ptr(v float64) *float64       { return &v }
+func f64Ptr(v float64) *float64             { return &v }
 
 var globalRetry = config.RetryConfig{
 	MaxRetries:     3,
@@ -253,6 +253,18 @@ func TestFilterEmptyProviders_EmptyMap(t *testing.T) {
 	}
 }
 
+func TestFilterEmptyProviders_RemovesAzureByTypeWithoutBaseURL(t *testing.T) {
+	raw := map[string]config.RawProviderConfig{
+		"my-azure": {Type: "azure", APIKey: "sk-azure"},
+	}
+
+	got := filterEmptyProviders(raw)
+
+	if _, exists := got["my-azure"]; exists {
+		t.Fatal("expected azure provider without base URL to be removed regardless of map key")
+	}
+}
+
 // --- applyProviderEnvVars ---
 
 func TestApplyProviderEnvVars_DiscoversFromAPIKey(t *testing.T) {
@@ -286,6 +298,92 @@ func TestApplyProviderEnvVars_DiscoversFromBaseURL(t *testing.T) {
 	}
 }
 
+func TestApplyProviderEnvVars_DiscoversOpenRouterFromAPIKey(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-openrouter")
+
+	got := applyProviderEnvVars(map[string]config.RawProviderConfig{})
+
+	p, exists := got["openrouter"]
+	if !exists {
+		t.Fatal("expected openrouter to be discovered from env var")
+	}
+	if p.APIKey != "sk-openrouter" {
+		t.Errorf("APIKey = %q, want sk-openrouter", p.APIKey)
+	}
+	if p.Type != "openrouter" {
+		t.Errorf("Type = %q, want openrouter", p.Type)
+	}
+	if p.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Errorf("BaseURL = %q, want https://openrouter.ai/api/v1", p.BaseURL)
+	}
+}
+
+func TestApplyProviderEnvVars_DiscoversAzureFromExplicitEnvVars(t *testing.T) {
+	t.Setenv("AZURE_API_KEY", "sk-azure")
+	t.Setenv("AZURE_API_BASE", "https://example-resource.openai.azure.com/openai/deployments/gpt-4o")
+
+	got := applyProviderEnvVars(map[string]config.RawProviderConfig{})
+
+	p, exists := got["azure"]
+	if !exists {
+		t.Fatal("expected azure to be discovered from env vars")
+	}
+	if p.APIKey != "sk-azure" {
+		t.Errorf("APIKey = %q, want sk-azure", p.APIKey)
+	}
+	if p.Type != "azure" {
+		t.Errorf("Type = %q, want azure", p.Type)
+	}
+	if p.BaseURL != "https://example-resource.openai.azure.com/openai/deployments/gpt-4o" {
+		t.Errorf("BaseURL = %q, want Azure API base", p.BaseURL)
+	}
+}
+
+func TestApplyProviderEnvVars_AzureAPIVersionEnvWins(t *testing.T) {
+	t.Setenv("AZURE_API_KEY", "sk-azure")
+	t.Setenv("AZURE_API_BASE", "https://example-resource.openai.azure.com/openai/deployments/gpt-4o")
+	t.Setenv("AZURE_API_VERSION", "2025-04-01-preview")
+
+	got := applyProviderEnvVars(map[string]config.RawProviderConfig{})
+
+	p, exists := got["azure"]
+	if !exists {
+		t.Fatal("expected azure to be discovered from env vars")
+	}
+	if p.APIVersion != "2025-04-01-preview" {
+		t.Errorf("APIVersion = %q, want 2025-04-01-preview", p.APIVersion)
+	}
+}
+
+func TestApplyProviderEnvVars_AzureAPIVersionEnvWinsWithoutOtherAzureEnvVars(t *testing.T) {
+	t.Setenv("AZURE_API_VERSION", "2025-04-01-preview")
+
+	raw := map[string]config.RawProviderConfig{
+		"azure": {
+			Type:       "azure",
+			APIKey:     "sk-yaml-azure",
+			BaseURL:    "https://example-resource.openai.azure.com/openai/deployments/gpt-4o",
+			APIVersion: "2024-10-21",
+		},
+	}
+
+	got := applyProviderEnvVars(raw)
+
+	if got["azure"].APIVersion != "2025-04-01-preview" {
+		t.Fatalf("APIVersion = %q, want 2025-04-01-preview", got["azure"].APIVersion)
+	}
+}
+
+func TestApplyProviderEnvVars_DoesNotDiscoverAzureWithoutBaseURL(t *testing.T) {
+	t.Setenv("AZURE_API_KEY", "sk-azure")
+
+	got := applyProviderEnvVars(map[string]config.RawProviderConfig{})
+
+	if _, exists := got["azure"]; exists {
+		t.Fatal("expected azure not to be discovered without AZURE_API_BASE")
+	}
+}
+
 func TestApplyProviderEnvVars_EnvWinsOverYAML(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-env-key")
 
@@ -312,6 +410,42 @@ func TestApplyProviderEnvVars_BaseURLEnvWinsOverYAML(t *testing.T) {
 
 	if got["openai"].BaseURL != "https://env-override.com" {
 		t.Errorf("BaseURL = %q, want https://env-override.com", got["openai"].BaseURL)
+	}
+}
+
+func TestApplyProviderEnvVars_DefaultBaseReplacesPlaceholderYAMLBaseURL(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-openrouter")
+
+	raw := map[string]config.RawProviderConfig{
+		"openrouter": {Type: "openrouter", APIKey: "sk-yaml", BaseURL: "${OPENROUTER_BASE_URL}"},
+	}
+
+	got := applyProviderEnvVars(raw)
+
+	if got["openrouter"].BaseURL != openRouterDefaultBaseURL {
+		t.Fatalf("BaseURL = %q, want %q", got["openrouter"].BaseURL, openRouterDefaultBaseURL)
+	}
+}
+
+func TestApplyProviderEnvVars_PlaceholderBaseURLEnvFallsBackToDefault(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-openrouter")
+	t.Setenv("OPENROUTER_BASE_URL", "${OPENROUTER_BASE_URL}")
+
+	got := applyProviderEnvVars(map[string]config.RawProviderConfig{})
+
+	if got["openrouter"].BaseURL != openRouterDefaultBaseURL {
+		t.Fatalf("BaseURL = %q, want %q", got["openrouter"].BaseURL, openRouterDefaultBaseURL)
+	}
+}
+
+func TestApplyProviderEnvVars_DoesNotDiscoverAzureWithPlaceholderBaseURL(t *testing.T) {
+	t.Setenv("AZURE_API_KEY", "sk-azure")
+	t.Setenv("AZURE_API_BASE", "${AZURE_API_BASE}")
+
+	got := applyProviderEnvVars(map[string]config.RawProviderConfig{})
+
+	if _, exists := got["azure"]; exists {
+		t.Fatal("expected azure not to be discovered with placeholder AZURE_API_BASE")
 	}
 }
 
