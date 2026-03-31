@@ -388,6 +388,25 @@ func EnrichEntryWithCacheType(c *echo.Context, cacheType string) {
 	entry.CacheType = cacheType
 }
 
+// EnrichEntryWithAuthMethod records which authentication mechanism was used for the request.
+func EnrichEntryWithAuthMethod(c *echo.Context, method string) {
+	entryVal := c.Get(string(LogEntryKey))
+	if entryVal == nil {
+		return
+	}
+	entry, ok := entryVal.(*LogEntry)
+	if !ok || entry == nil {
+		return
+	}
+	method = strings.ToLower(strings.TrimSpace(method))
+	switch method {
+	case AuthMethodAPIKey, AuthMethodMasterKey, AuthMethodNoKey, "unknown":
+	default:
+		return
+	}
+	entry.AuthMethod = method
+}
+
 // EnrichEntryWithAuthKeyID attaches the authenticated managed auth key id to the live audit entry.
 func EnrichEntryWithAuthKeyID(c *echo.Context, authKeyID string) {
 	entryVal := c.Get(string(LogEntryKey))

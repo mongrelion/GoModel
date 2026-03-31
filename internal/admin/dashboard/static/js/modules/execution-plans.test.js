@@ -200,6 +200,8 @@ test('executionPlanWorkflowChart returns the shared chart contract for workflow 
             aiNodeClass: '',
             responseConnClass: '',
             responseNodeClass: '',
+            authNodeClass: '',
+            authNodeSublabel: null,
             showAsync: true,
             showUsage: false,
             showAudit: true
@@ -250,6 +252,8 @@ test('executionPlanWorkflowChart masks globally disabled workflow features from 
             aiNodeClass: '',
             responseConnClass: '',
             responseNodeClass: '',
+            authNodeClass: '',
+            authNodeSublabel: null,
             showAsync: false,
             showUsage: false,
             showAudit: false
@@ -302,6 +306,8 @@ test('executionPlanAuditChart returns the shared chart contract for audit runtim
             aiNodeClass: 'ep-node-ai-skipped',
             responseConnClass: 'ep-conn-dim',
             responseNodeClass: 'ep-node-endpoint-success',
+            authNodeClass: '',
+            authNodeSublabel: null,
             showAsync: true,
             showUsage: true,
             showAudit: true
@@ -333,6 +339,8 @@ test('executionPlanAuditChart forces audit nodes even when the workflow version 
             aiNodeClass: 'ep-node-ai-skipped',
             responseConnClass: 'ep-conn-dim',
             responseNodeClass: 'ep-node-endpoint-success',
+            authNodeClass: '',
+            authNodeSublabel: null,
             showAsync: true,
             showUsage: false,
             showAudit: true
@@ -1407,7 +1415,9 @@ test('epRuntimeFromEntry derives cache hit state from cache_type without relying
             model: 'gpt-5',
             statusCode: null,
             responseSuccess: false,
-            aiSuccess: false
+            aiSuccess: false,
+            authError: false,
+            authMethod: null
         })
     );
 
@@ -1420,7 +1430,9 @@ test('epRuntimeFromEntry derives cache hit state from cache_type without relying
             model: null,
             statusCode: null,
             responseSuccess: false,
-            aiSuccess: false
+            aiSuccess: false,
+            authError: false,
+            authMethod: null
         })
     );
 
@@ -1433,7 +1445,9 @@ test('epRuntimeFromEntry derives cache hit state from cache_type without relying
             model: null,
             statusCode: null,
             responseSuccess: false,
-            aiSuccess: false
+            aiSuccess: false,
+            authError: false,
+            authMethod: null
         })
     );
 });
@@ -1483,9 +1497,29 @@ test('epRuntimeFromEntry treats any uncached 2xx status as a successful AI and r
             model: 'gpt-5',
             statusCode: 204,
             responseSuccess: true,
-            aiSuccess: true
+            aiSuccess: true,
+            authError: false,
+            authMethod: null
         })
     );
+});
+
+test('auth runtime highlights auth node state from audit entries', () => {
+    const module = createExecutionPlansModule();
+
+    const failedAuth = module.epRuntimeFromEntry({
+        auth_method: 'api_key',
+        error_type: 'authentication_error'
+    });
+    assert.equal(module.epAuthNodeClass(failedAuth), 'ep-node-auth-error');
+    assert.equal(module.epAuthNodeSublabel(failedAuth), 'api_key');
+
+    const masterKeyAuth = module.epRuntimeFromEntry({
+        auth_method: 'master_key',
+        status_code: 200
+    });
+    assert.equal(module.epAuthNodeClass(masterKeyAuth), 'ep-node-auth-success');
+    assert.equal(module.epAuthNodeSublabel(masterKeyAuth), 'master_key');
 });
 
 test('auditEntryExecutionPlan prefers an exact historical workflow version cache over active workflows', () => {
