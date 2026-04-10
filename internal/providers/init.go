@@ -72,6 +72,9 @@ func Init(ctx context.Context, result *config.LoadResult, factory *ProviderFacto
 	if factory == nil {
 		return nil, fmt.Errorf("factory is required")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	providerMap, credentialResolved := resolveProviders(result.RawProviders, result.Config.Resilience, factory.discoveryConfigsSnapshot())
 
@@ -83,14 +86,14 @@ func Init(ctx context.Context, result *config.LoadResult, factory *ProviderFacto
 	registry := NewModelRegistry()
 	registry.SetCache(modelCache)
 
-	count, err := initializeProviders(providerMap, factory, registry)
+	count, err := initializeProviders(ctx, providerMap, factory, registry)
 	if err != nil {
 		modelCache.Close()
 		return nil, err
 	}
 	if count == 0 {
 		modelCache.Close()
-		return nil, fmt.Errorf("no providers were successfully initialized")
+		return nil, fmt.Errorf("no providers were successfully registered")
 	}
 
 	slog.Info("starting non-blocking model registry initialization...")
@@ -193,8 +196,8 @@ func initCache(cfg *config.Config) (modelcache.Cache, error) {
 }
 
 // initializeProviders instantiates and registers all resolved providers.
-// Returns the count of successfully initialized providers.
-func initializeProviders(providerMap map[string]ProviderConfig, factory *ProviderFactory, registry *ModelRegistry) (int, error) {
+// Returns the count of successfully registered providers.
+func initializeProviders(ctx context.Context, providerMap map[string]ProviderConfig, factory *ProviderFactory, registry *ModelRegistry) (int, error) {
 	// Sort provider names for deterministic initialization order
 	names := make([]string, 0, len(providerMap))
 	for name := range providerMap {
@@ -214,23 +217,22 @@ func initializeProviders(providerMap map[string]ProviderConfig, factory *Provide
 			continue
 		}
 
-		// Check availability for providers that support it
+		// Availability checks are diagnostics only. Providers stay registered so
+		// async initialization and periodic refresh can discover them later.
 		if checker, ok := p.(core.AvailabilityChecker); ok {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := checker.CheckAvailability(ctx); err != nil {
-				slog.Warn("provider not available, skipping",
+			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if err := checker.CheckAvailability(probeCtx); err != nil {
+				slog.Warn("provider unavailable at startup; keeping registered for refresh",
 					"name", name,
 					"type", pCfg.Type,
 					"reason", err.Error())
-				cancel()
-				continue
 			}
 			cancel()
 		}
 
 		registry.RegisterProviderWithNameAndType(p, name, pCfg.Type)
 		count++
-		slog.Info("provider initialized", "name", name, "type", pCfg.Type)
+		slog.Info("provider registered", "name", name, "type", pCfg.Type)
 	}
 
 	return count, nil
