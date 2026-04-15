@@ -35,7 +35,12 @@ docker run --rm -p 8080:8080 \
 
 ### 2. Send your first request
 
-```bash
+Use `curl` or the OpenAI SDKs for Python and JavaScript against the same
+OpenAI-compatible endpoint:
+
+<CodeGroup>
+
+```bash curl
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer change-me" \
@@ -44,6 +49,40 @@ curl http://localhost:8080/v1/chat/completions \
     "messages": [{"role": "user", "content": "Say hello in one sentence."}]
   }'
 ```
+
+```python Python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="change-me",
+)
+
+completion = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Say hello in one sentence."}],
+)
+
+print(completion.choices[0].message.content)
+```
+
+```javascript JavaScript
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "http://localhost:8080/v1",
+  apiKey: "change-me",
+});
+
+const completion = await client.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [{ role: "user", content: "Say hello in one sentence." }],
+});
+
+console.log(completion.choices[0].message.content);
+```
+
+</CodeGroup>
 
 ### 3. Open the Admin Panel
 
